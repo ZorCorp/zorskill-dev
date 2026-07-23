@@ -20,6 +20,12 @@ assert_eq "$(cd "$tmpr/plugins/demo" && ZORSKILL_ROOT="" resolve_root)" "$tmpr" 
 iso="$(mktemp -d)"; cp "$(cd "$HERE/.." && pwd)/scripts/zorskill-dev.sh" "$iso/zsd.sh"
 assert_fail bash -c 'cd "'"$iso"'"; ZORSKILL_ROOT=""; source "'"$iso"'/zsd.sh" --lib; resolve_root'
 rm -rf "$tmpr" "$iso"
+# skip a nested per-plugin marketplace.json that has .plugins but NO top-level semver
+# .version (e.g. kf-cli's stray outlier) and walk up to the true aggregate root.
+tv="$(mktemp -d)"; make_fake_root "$tv" kf-cli 0.7.3 0.7.3
+printf '{ "metadata":{"version":"0.7.3"}, "plugins":[{"name":"kf-cli"}] }\n' > "$tv/plugins/kf-cli/.claude-plugin/marketplace.json"
+assert_eq "$(cd "$tv/plugins/kf-cli" && ZORSKILL_ROOT="" resolve_root)" "$tv" "skip versionless nested marketplace"
+rm -rf "$tv"
 
 # --- check_json + check_versions (Task 1.3) ---
 # check_versions: PASS when root entry matches plugin.json

@@ -12,7 +12,10 @@ yellow(){ printf '\033[33m%s\033[0m\n' "$*"; }
 
 is_semver(){ [[ "${1:-}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; }
 
-_is_market_root(){ [[ -f "$1/.claude-plugin/marketplace.json" ]] && jq -e '.plugins' "$1/.claude-plugin/marketplace.json" >/dev/null 2>&1; }
+# The aggregate root marketplace has BOTH a .plugins array AND a top-level semver .version.
+# Requiring the semver .version skips per-plugin outliers (e.g. kf-cli's stray marketplace.json,
+# which carries .plugins but a metadata.version instead of a top-level .version).
+_is_market_root(){ [[ -f "$1/.claude-plugin/marketplace.json" ]] && jq -e '.plugins and (.version|type=="string" and test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))' "$1/.claude-plugin/marketplace.json" >/dev/null 2>&1; }
 
 resolve_root(){
   if [[ -n "${ZORSKILL_ROOT:-}" ]] && _is_market_root "$ZORSKILL_ROOT"; then echo "$ZORSKILL_ROOT"; return 0; fi
