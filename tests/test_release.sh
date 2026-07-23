@@ -32,4 +32,13 @@ git -C "$work" push --quiet origin HEAD:refs/heads/main
 assert_pass bash -c 'source '"$HERE"'/../scripts/zorskill-dev.sh --lib; advance_pointer "'"$root"'" demo'
 assert_eq "$(read_plugin_version "$root" demo)" "0.2.0" "pointer advanced to 0.2.0"
 
+# --- cmd_release end-to-end + guard (Task 2.3) ---
+# end-to-end release 0.2.0 (commit-only, no --push)
+assert_pass bash -c 'source '"$HERE"'/../scripts/zorskill-dev.sh --lib; ZORSKILL_ROOT="'"$root"'" cmd_release demo 0.2.0'
+assert_eq "$(jq -r '.plugins[]|select(.name=="demo")|.version' "$root/.claude-plugin/marketplace.json")" "0.2.0" "root entry after release"
+assert_eq "$(jq -r '.version' "$root/.claude-plugin/marketplace.json")" "1.0.1" "aggregate after release"
+assert_pass bash -c 'git -C "'"$root"'" log -1 --pretty=%s | grep -q "zorskill: demo v0.2.0"'
+# guard: asking for a version the plugin repo does NOT declare must abort
+assert_fail bash -c 'source '"$HERE"'/../scripts/zorskill-dev.sh --lib; ZORSKILL_ROOT="'"$root"'" cmd_release demo 9.9.9'
+
 echo "  ($TESTS_RUN run, $TESTS_FAIL failed)"; rm -rf "$FIX"; [[ $TESTS_FAIL -eq 0 ]]

@@ -139,6 +139,42 @@ apply_release_versions(){
   echo "$agg"
 }
 
+cmd_release(){
+  local name="${1:-}" ver="${2:-}" push=0 agg_override="" a
+  shift 2 2>/dev/null || { red "usage: release <name> <x.y.z> [--push] [--marketplace-version <x.y.z>]"; return 2; }
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --push) push=1;;
+      --marketplace-version) agg_override="${2:-}"; shift;;
+      *) red "unknown flag: $1"; return 2;;
+    esac; shift
+  done
+  is_semver "$ver" || { red "version must be x.y.z: $ver"; return 2; }
+  local root; root="$(resolve_root)" || { red "cannot locate zorskill root (set ZORSKILL_ROOT)"; return 1; }
+  jq -e --arg n "$name" '.plugins[]|select(.name==$n)' "$root/.claude-plugin/marketplace.json" >/dev/null 2>&1 \
+    || { red "not a registered plugin: $name"; return 1; }
+
+  echo "▸ 1/5 advance submodule pointer"; advance_pointer "$root" "$name" || return 1
+  local declared; declared="$(read_plugin_version "$root" "$name")"
+  echo "▸ 2/5 verify plugin repo declares $ver"
+  if [[ "$declared" != "$ver" ]]; then
+    red "  ✗ plugins/$name declares '$declared', you asked for '$ver'."
+    red "    Bump + push $name's own repo to $ver first, then re-run. (This tool never edits a plugin's repo.)"
+    return 1
+  fi
+  echo "▸ 3/5 sync marketplace versions"; a="$(apply_release_versions "$root" "$name" "$ver" "$agg_override")" || return 1
+  echo "▸ 4/5 validate"; ( cd "$root" && cmd_check ) || { red "check failed — aborting (files bumped; revert or fix)"; return 1; }
+  echo "▸ 5/5 commit"
+  git -C "$root" add "plugins/$name" ".claude-plugin/marketplace.json"
+  git -C "$root" commit -q -m "zorskill: $name v$ver (marketplace $a)" || yellow "  (nothing to commit?)"
+  if [[ $push -eq 1 ]]; then
+    git -C "$root" push origin main && green "Released $name v$ver (marketplace $a) — pushed to main."
+  else
+    green "Released $name v$ver (marketplace $a) — committed locally."
+    echo "  Push when ready:  git -C \"$root\" push origin main"
+  fi
+}
+
 # ... (functions added in later tasks) ...
 
 main(){
