@@ -26,6 +26,39 @@ resolve_root(){
   return 1
 }
 
+# Emit each plugin's name + source path, one "name<TAB>path" per line.
+_plugins(){ jq -r '.plugins[] | "\(.name)\t\(.source)"' "$1/.claude-plugin/marketplace.json"; }
+
+check_json(){
+  local root="$1" fail=0 f
+  for f in "$root/.claude-plugin/marketplace.json"; do
+    jq -e . "$f" >/dev/null 2>&1 || { red "  ✗ invalid JSON: ${f#$root/}"; fail=1; }
+  done
+  while IFS=$'\t' read -r name src; do
+    f="$root/${src#./}/.claude-plugin/plugin.json"
+    [[ -f "$f" ]] || continue
+    jq -e . "$f" >/dev/null 2>&1 || { red "  ✗ invalid JSON: plugins/$name/.claude-plugin/plugin.json"; fail=1; }
+  done < <(_plugins "$root")
+  [[ $fail -eq 0 ]] && green "  ✓ JSON valid"
+  return $fail
+}
+
+check_versions(){
+  local root="$1" fail=0 agg name src pj_ver root_ver
+  agg="$(jq -r '.version // ""' "$root/.claude-plugin/marketplace.json")"
+  if is_semver "$agg"; then green "  ✓ aggregate .version present ($agg)"
+  else red "  ✗ aggregate top-level .version missing or not semver: '$agg'"; fail=1; fi
+  while IFS=$'\t' read -r name src; do
+    root_ver="$(jq -r --arg n "$name" '.plugins[]|select(.name==$n)|.version' "$root/.claude-plugin/marketplace.json")"
+    local pj="$root/${src#./}/.claude-plugin/plugin.json"
+    if [[ ! -f "$pj" ]]; then red "  ✗ $name: missing .claude-plugin/plugin.json"; fail=1; continue; fi
+    pj_ver="$(jq -r '.version // ""' "$pj")"
+    if [[ "$root_ver" == "$pj_ver" ]] && is_semver "$root_ver"; then green "  ✓ $name @ $root_ver"
+    else red "  ✗ $name VERSION DRIFT — root marketplace='$root_ver' vs plugin.json='$pj_ver'"; fail=1; fi
+  done < <(_plugins "$root")
+  return $fail
+}
+
 # ... (functions added in later tasks) ...
 
 main(){

@@ -21,4 +21,21 @@ iso="$(mktemp -d)"; cp "$(cd "$HERE/.." && pwd)/scripts/zorskill-dev.sh" "$iso/z
 assert_fail bash -c 'cd "'"$iso"'"; ZORSKILL_ROOT=""; source "'"$iso"'/zsd.sh" --lib; resolve_root'
 rm -rf "$tmpr" "$iso"
 
+# --- check_json + check_versions (Task 1.3) ---
+# check_versions: PASS when root entry matches plugin.json
+r1="$(mktemp -d)"; make_fake_root "$r1" demo 0.3.0 0.3.0
+assert_pass check_versions "$r1"
+# check_versions: FAIL on drift (the historical bug: root entry behind plugin.json)
+r2="$(mktemp -d)"; make_fake_root "$r2" demo 0.5.13 0.7.1
+assert_fail check_versions "$r2"
+# check_versions: FAIL when aggregate .version missing
+r3="$(mktemp -d)"; make_fake_root "$r3" demo 0.1.0 0.1.0
+tmp=$(mktemp); jq 'del(.version)' "$r3/.claude-plugin/marketplace.json" > "$tmp" && mv "$tmp" "$r3/.claude-plugin/marketplace.json"
+assert_fail check_versions "$r3"
+# check_json: FAIL on malformed plugin.json
+r4="$(mktemp -d)"; make_fake_root "$r4" demo 0.1.0 0.1.0
+echo '{ bad json' > "$r4/plugins/demo/.claude-plugin/plugin.json"
+assert_fail check_json "$r4"
+rm -rf "$r1" "$r2" "$r3" "$r4"
+
 echo "  ($TESTS_RUN run, $TESTS_FAIL failed)"; [[ $TESTS_FAIL -eq 0 ]]
