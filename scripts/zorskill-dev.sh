@@ -125,6 +125,20 @@ advance_pointer(){
 
 read_plugin_version(){ jq -r '.version // ""' "$1/plugins/$2/.claude-plugin/plugin.json"; }
 
+_bump_patch(){ local v="$1"; IFS=. read -r a b c <<<"$v"; echo "$a.$b.$((c+1))"; }
+
+apply_release_versions(){
+  local root="$1" name="$2" ver="$3" agg="${4:-}" cur tmp mf="$1/.claude-plugin/marketplace.json"
+  is_semver "$ver" || { red "version must be x.y.z: $ver" >&2; return 2; }
+  cur="$(jq -r '.version' "$mf")"
+  if [[ -z "$agg" ]]; then agg="$(_bump_patch "$cur")"; fi
+  is_semver "$agg" || { red "aggregate must be x.y.z: $agg" >&2; return 2; }
+  tmp=$(mktemp)
+  jq --arg n "$name" --arg v "$ver" --arg a "$agg" \
+     '.version=$a | (.plugins[]|select(.name==$n)|.version)=$v' "$mf" > "$tmp" && mv "$tmp" "$mf"
+  echo "$agg"
+}
+
 # ... (functions added in later tasks) ...
 
 main(){

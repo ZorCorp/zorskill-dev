@@ -47,4 +47,15 @@ b2="$(mktemp -d)"; make_fake_root "$b2" demo 0.1.0 0.1.0; rm "$b2/plugins/demo/S
 assert_fail check_both_format "$b2"
 rm -rf "$b1" "$b2"
 
+# --- apply_release_versions (Task 2.2) ---
+# sets plugin entry + auto patch-bumps aggregate
+a1="$(mktemp -d)"; make_fake_root "$a1" demo 0.1.0 0.2.0
+newagg="$(apply_release_versions "$a1" demo 0.2.0)"
+assert_eq "$newagg" "1.0.1" "aggregate auto patch-bump"
+assert_eq "$(jq -r '.plugins[]|select(.name=="demo")|.version' "$a1/.claude-plugin/marketplace.json")" "0.2.0" "root entry updated"
+# explicit aggregate override
+a2="$(mktemp -d)"; make_fake_root "$a2" demo 0.1.0 0.2.0
+assert_eq "$(apply_release_versions "$a2" demo 0.2.0 2.0.0)" "2.0.0" "aggregate override"
+rm -rf "$a1" "$a2"
+
 echo "  ($TESTS_RUN run, $TESTS_FAIL failed)"; [[ $TESTS_FAIL -eq 0 ]]
