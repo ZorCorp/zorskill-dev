@@ -184,6 +184,73 @@ render_template(){
   sed -e "s|{{NAME}}|$ename|g" -e "s|{{DESCRIPTION}}|$edesc|g" "$tmpl"
 }
 
+_script_dir(){ cd "$(dirname "${BASH_SOURCE[0]}")" && pwd; }
+
+cmd_new(){
+  local name="${1:-}" url="" desc="" create=0
+  [[ -n "$name" ]] || { red "usage: new <name> [--repo-url URL] [--create-remote] [--description TEXT]"; return 2; }
+  shift
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --repo-url) url="${2:-}"; shift;;
+      --create-remote) create=1;;
+      --description) desc="${2:-}"; shift;;
+      *) red "unknown flag: $1"; return 2;;
+    esac; shift
+  done
+  local root; root="$(resolve_root)" || { red "cannot locate zorskill root (set ZORSKILL_ROOT)"; return 1; }
+  jq -e --arg n "$name" '.plugins[]|select(.name==$n)' "$root/.claude-plugin/marketplace.json" >/dev/null 2>&1 \
+    && { red "plugin already registered: $name"; return 1; }
+  [[ -n "$url" ]] || url="https://github.com/ZorCorp/$name.git"
+  [[ -n "$desc" ]] || desc="TODO one-line description of $name"
+
+  if [[ $create -eq 1 ]]; then
+    yellow "  --create-remote will run: gh repo create ZorCorp/$name --public"
+    command -v gh >/dev/null 2>&1 || { red "gh not installed"; return 1; }
+    gh repo create "ZorCorp/$name" --public || return 1
+  fi
+
+  local sub="$root/plugins/$name"
+  echo "▸ add submodule"
+  if ! git -C "$root" -c protocol.file.allow=always submodule add "$url" "plugins/$name"; then
+    # An empty upstream repo has no commit to check out, so `submodule add` cannot
+    # complete the gitlink (the clone still lands on disk). Register .gitmodules and
+    # fall through to scaffolding; the human commits+pushes the plugin repo, after
+    # which the pointer is recorded via /zorskill-dev:release.
+    if [[ -e "$sub/.git" ]]; then
+      git -C "$root" config -f "$root/.gitmodules" "submodule.plugins/$name.path" "plugins/$name"
+      git -C "$root" config -f "$root/.gitmodules" "submodule.plugins/$name.url"  "$url"
+      yellow "  ⚠ upstream $name is empty — scaffolded locally (pointer recorded later via release)."
+    else
+      red "submodule add failed: $name"; return 1
+    fi
+  fi
+
+  local tdir; tdir="$(_script_dir)/../templates"
+  if [[ ! -f "$sub/.claude-plugin/plugin.json" ]]; then
+    echo "▸ scaffold plugin.json + SKILL.md (uncommitted in plugins/$name — push them from its own repo)"
+    mkdir -p "$sub/.claude-plugin"
+    render_template "$tdir/plugin.json.tmpl" "$name" "$desc" > "$sub/.claude-plugin/plugin.json"
+    render_template "$tdir/SKILL.md.tmpl"   "$name" "$desc" > "$sub/SKILL.md"
+  fi
+
+  echo "▸ register in root marketplace.json + bump aggregate"
+  local cur agg tmp mf="$root/.claude-plugin/marketplace.json"
+  cur="$(jq -r '.version' "$mf")"; agg="$(_bump_patch "$cur")"
+  tmp=$(mktemp)
+  jq --arg n "$name" --arg d "$desc" --arg a "$agg" \
+    '.version=$a | .plugins += [{"name":$n,"description":$d,"version":"0.1.0","author":{"name":"ZorCorp","url":"https://github.com/ZorCorp"},"source":("./plugins/"+$n),"category":"productivity"}]' \
+    "$mf" > "$tmp" && mv "$tmp" "$mf"
+
+  git -C "$root" add "$root/.gitmodules" ".claude-plugin/marketplace.json" 2>/dev/null
+  # Stage the gitlink only if the submodule has a commit checked out (empty upstreams don't).
+  if git -C "$sub" rev-parse HEAD >/dev/null 2>&1; then git -C "$root" add "plugins/$name"; fi
+  green "Scaffolded $name (marketplace $agg). Next:"
+  echo "  1. Fill plugins/$name/SKILL.md + plugin.json, then commit+push them to ZorCorp/$name."
+  echo "  2. In zorskill: git commit -m 'Add $name plugin' (already staged)."
+  echo "  3. Release updates later with:  /zorskill-dev:release $name <x.y.z>"
+}
+
 # ... (functions added in later tasks) ...
 
 main(){
