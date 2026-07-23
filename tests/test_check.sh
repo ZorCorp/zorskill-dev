@@ -58,4 +58,9 @@ a2="$(mktemp -d)"; make_fake_root "$a2" demo 0.1.0 0.2.0
 assert_eq "$(apply_release_versions "$a2" demo 0.2.0 2.0.0)" "2.0.0" "aggregate override"
 rm -rf "$a1" "$a2"
 
+# --- render_template (Task 3.1) ---
+rt="$(render_template "$(cd "$HERE/.." && pwd)/templates/plugin.json.tmpl" foo "a: b desc")"
+assert_eq "$(echo "$rt" | jq -r .name)" "foo" "template NAME"
+assert_eq "$(echo "$rt" | jq -r .description)" "a: b desc" "template DESCRIPTION"
+
 echo "  ($TESTS_RUN run, $TESTS_FAIL failed)"; [[ $TESTS_FAIL -eq 0 ]]

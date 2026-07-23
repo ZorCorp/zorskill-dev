@@ -175,6 +175,15 @@ cmd_release(){
   fi
 }
 
+render_template(){
+  local tmpl="$1" name="$2" desc="$3"
+  # sed with a safe delimiter; escape & and the delimiter in the replacement.
+  local ename edesc
+  ename="$(printf '%s' "$name" | sed 's/[&|]/\\&/g')"
+  edesc="$(printf '%s' "$desc" | sed 's/[&|]/\\&/g')"
+  sed -e "s|{{NAME}}|$ename|g" -e "s|{{DESCRIPTION}}|$edesc|g" "$tmpl"
+}
+
 # ... (functions added in later tasks) ...
 
 main(){
