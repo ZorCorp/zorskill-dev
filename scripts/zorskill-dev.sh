@@ -70,6 +70,43 @@ check_both_format(){
   return $fail
 }
 
+check_submodules(){
+  local root="$1" fail=0 line flag rest path
+  # Lines: " <sha> path (desc)" normal; "-<sha>" uninit; "+<sha>" moved; "U<sha>" conflict.
+  while read -r line; do
+    [[ -z "$line" ]] && continue
+    flag="${line:0:1}"; rest="${line:1}"; path="$(echo "$rest" | awk '{print $2}')"
+    case "$flag" in
+      '-') red "  ✗ submodule not initialized: $path (run: git submodule update --init $path)"; fail=1;;
+      'U') red "  ✗ submodule has merge conflict: $path"; fail=1;;
+      '+') yellow "  ⚠ submodule pointer differs from index (uncommitted pointer move): $path";;
+    esac
+  done < <(git -C "$root" submodule status 2>/dev/null)
+  # Dirty worktrees inside plugin submodules
+  local name src d
+  while IFS=$'\t' read -r name src; do
+    d="$root/${src#./}"
+    [[ -d "$d/.git" || -f "$d/.git" ]] || continue
+    if [[ -n "$(git -C "$d" status --porcelain 2>/dev/null)" ]]; then
+      yellow "  ⚠ uncommitted changes inside plugins/$name (commit/push to its own repo before releasing)"
+    fi
+  done < <(_plugins "$root")
+  [[ $fail -eq 0 ]] && green "  ✓ submodules initialized, no conflicts"
+  return $fail
+}
+
+cmd_check(){
+  local root; root="$(resolve_root)" || { red "cannot locate zorskill root (set ZORSKILL_ROOT)"; exit 1; }
+  local rc=0
+  echo "▸ JSON validity";                        check_json        "$root" || rc=1
+  echo "▸ Version consistency (per-plugin)";      check_versions    "$root" || rc=1
+  echo "▸ Both-format presence";                  check_both_format "$root" || rc=1
+  echo "▸ Submodule health";                      check_submodules  "$root" || rc=1
+  echo
+  if [[ $rc -eq 0 ]]; then green "PASS — marketplace is consistent ($root)"; else red "FAIL — fix the ✗ items above"; fi
+  return $rc
+}
+
 # ... (functions added in later tasks) ...
 
 main(){
