@@ -107,6 +107,24 @@ cmd_check(){
   return $rc
 }
 
+_sub_branch(){ # $1 root, $2 name → tracking branch (from .gitmodules or remote HEAD)
+  local br; br="$(git config -f "$1/.gitmodules" --get "submodule.plugins/$2.branch" 2>/dev/null || true)"
+  if [[ -z "$br" ]]; then
+    br="$(git -C "$1/plugins/$2" remote show origin 2>/dev/null | sed -n 's/.*HEAD branch: //p')"
+  fi
+  echo "${br:-main}"
+}
+
+advance_pointer(){
+  local root="$1" name="$2" sub="$1/plugins/$2" br
+  [[ -d "$sub" ]] || { red "no such submodule: plugins/$name"; return 1; }
+  git -C "$sub" -c protocol.file.allow=always fetch --quiet origin || { red "fetch failed: $name"; return 1; }
+  br="$(_sub_branch "$root" "$name")"
+  git -C "$sub" checkout --quiet "origin/$br" 2>/dev/null || git -C "$sub" checkout --quiet "$br" || { red "checkout failed: $name @ $br"; return 1; }
+}
+
+read_plugin_version(){ jq -r '.version // ""' "$1/plugins/$2/.claude-plugin/plugin.json"; }
+
 # ... (functions added in later tasks) ...
 
 main(){
