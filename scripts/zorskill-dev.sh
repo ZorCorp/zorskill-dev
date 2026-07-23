@@ -12,6 +12,20 @@ yellow(){ printf '\033[33m%s\033[0m\n' "$*"; }
 
 is_semver(){ [[ "${1:-}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; }
 
+_is_market_root(){ [[ -f "$1/.claude-plugin/marketplace.json" ]] && jq -e '.plugins' "$1/.claude-plugin/marketplace.json" >/dev/null 2>&1; }
+
+resolve_root(){
+  if [[ -n "${ZORSKILL_ROOT:-}" ]] && _is_market_root "$ZORSKILL_ROOT"; then echo "$ZORSKILL_ROOT"; return 0; fi
+  local d="$PWD"
+  while [[ "$d" != "/" ]]; do
+    if _is_market_root "$d"; then echo "$d"; return 0; fi
+    d="$(dirname "$d")"
+  done
+  local sp; sp="$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-superproject-working-tree 2>/dev/null || true)"
+  if [[ -n "$sp" ]] && _is_market_root "$sp"; then echo "$sp"; return 0; fi
+  return 1
+}
+
 # ... (functions added in later tasks) ...
 
 main(){
