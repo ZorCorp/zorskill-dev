@@ -33,9 +33,9 @@ resolve_root(){
 _plugins(){ jq -r '.plugins[] | "\(.name)\t\(.source)"' "$1/.claude-plugin/marketplace.json"; }
 
 check_json(){
-  local root="$1" fail=0 f
-  for f in "$root/.claude-plugin/marketplace.json"; do
-    jq -e . "$f" >/dev/null 2>&1 || { red "  ✗ invalid JSON: ${f#$root/}"; fail=1; }
+  local root="$1" fail=0 f name src   # name/src MUST be local: check_json runs inside
+  for f in "$root/.claude-plugin/marketplace.json"; do   # check_release's scope (which holds
+    jq -e . "$f" >/dev/null 2>&1 || { red "  ✗ invalid JSON: ${f#$root/}"; fail=1; }  # local name).
   done
   while IFS=$'\t' read -r name src; do
     f="$root/${src#./}/.claude-plugin/plugin.json"
@@ -63,13 +63,15 @@ check_versions(){
 }
 
 check_both_format(){
+  # Severity: missing plugin.json = ERROR (a plugin must have the Claude-plugin manifest);
+  # missing SKILL.md = WARNING (some plugins are intentionally Claude-only, e.g. code-to-video).
   local root="$1" fail=0 name src d
   while IFS=$'\t' read -r name src; do
     d="$root/${src#./}"
-    [[ -f "$d/SKILL.md" ]] || { red "  ✗ $name: missing SKILL.md (agent-skill format)"; fail=1; }
+    [[ -f "$d/SKILL.md" ]] || yellow "  ⚠ $name: no SKILL.md (agent-skill format) — Claude-only plugin, not blocking"
     [[ -f "$d/.claude-plugin/plugin.json" ]] || { red "  ✗ $name: missing .claude-plugin/plugin.json (Claude-plugin format)"; fail=1; }
   done < <(_plugins "$root")
-  [[ $fail -eq 0 ]] && green "  ✓ every plugin has SKILL.md + .claude-plugin/plugin.json"
+  [[ $fail -eq 0 ]] && green "  ✓ every plugin has .claude-plugin/plugin.json (SKILL.md optional — warnings above, if any)"
   return $fail
 }
 
@@ -142,6 +144,41 @@ apply_release_versions(){
   echo "$agg"
 }
 
+# Release-time validation, SCOPED so plugin X's release is never blocked by plugin Y's
+# pre-existing debt. Hard-fails ONLY on (a) repo-wide JSON validity and (b) the TARGET
+# plugin's own consistency (plugin.json present; plugin.json == root entry == requested).
+# Every other plugin's non-uniformity/drift is printed as a non-fatal WARNING.
+check_release(){
+  local root="$1" name="$2" ver="$3" rc=0 n s d p pjver rootver rv pv
+  echo "  • repo-wide JSON validity"
+  if check_json "$root" >/dev/null 2>&1; then green "  ✓ JSON valid (repo-wide)"
+  else red "  ✗ repo has invalid JSON — fix before releasing:"; check_json "$root"; rc=1; fi
+  echo "  • target plugin: $name"
+  p="$root/plugins/$name/.claude-plugin/plugin.json"
+  if [[ ! -f "$p" ]]; then
+    red "  ✗ $name: missing .claude-plugin/plugin.json"; rc=1
+  else
+    pjver="$(jq -r '.version // ""' "$p")"
+    rootver="$(jq -r --arg n "$name" '.plugins[]|select(.name==$n)|.version' "$root/.claude-plugin/marketplace.json")"
+    if [[ "$pjver" == "$ver" && "$rootver" == "$ver" ]] && is_semver "$ver"; then
+      green "  ✓ $name @ $ver (plugin.json == marketplace == requested)"
+    else
+      red "  ✗ $name version mismatch — plugin.json='$pjver' marketplace='$rootver' requested='$ver'"; rc=1
+    fi
+    [[ -f "$root/plugins/$name/SKILL.md" ]] || yellow "  ⚠ $name: no SKILL.md (Claude-only plugin) — not blocking"
+  fi
+  # Other plugins: report pre-existing non-uniformity/drift as WARNINGS only — never gate.
+  while IFS=$'\t' read -r n s; do
+    [[ "$n" == "$name" ]] && continue
+    d="$root/${s#./}"; p="$d/.claude-plugin/plugin.json"
+    if [[ ! -f "$p" ]]; then yellow "  ⚠ other plugin $n: missing plugin.json (pre-existing; not blocking $name)"; continue; fi
+    rv="$(jq -r --arg m "$n" '.plugins[]|select(.name==$m)|.version' "$root/.claude-plugin/marketplace.json")"
+    pv="$(jq -r '.version // ""' "$p")"
+    [[ "$rv" == "$pv" ]] || yellow "  ⚠ other plugin $n: version drift root='$rv' plugin.json='$pv' (pre-existing; not blocking $name)"
+  done < <(_plugins "$root")
+  return $rc
+}
+
 cmd_release(){
   local name="${1:-}" ver="${2:-}" push=0 agg_override="" a
   shift 2 2>/dev/null || { red "usage: release <name> <x.y.z> [--push] [--marketplace-version <x.y.z>]"; return 2; }
@@ -166,7 +203,8 @@ cmd_release(){
     return 1
   fi
   echo "▸ 3/5 sync marketplace versions"; a="$(apply_release_versions "$root" "$name" "$ver" "$agg_override")" || return 1
-  echo "▸ 4/5 validate"; ( cd "$root" && cmd_check ) || { red "check failed — aborting (files bumped; revert or fix)"; return 1; }
+  echo "▸ 4/5 validate (scoped to $name + repo-wide JSON; other plugins' drift is non-blocking)"
+  check_release "$root" "$name" "$ver" || { red "check failed for target/JSON — aborting (files bumped; revert or fix)"; return 1; }
   echo "▸ 5/5 commit"
   git -C "$root" add "plugins/$name" ".claude-plugin/marketplace.json"
   git -C "$root" commit -q -m "zorskill: $name v$ver (marketplace $a)" || yellow "  (nothing to commit?)"

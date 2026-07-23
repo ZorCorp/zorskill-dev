@@ -33,7 +33,11 @@ assert_pass bash -c 'source '"$HERE"'/../scripts/zorskill-dev.sh --lib; advance_
 assert_eq "$(read_plugin_version "$root" demo)" "0.2.0" "pointer advanced to 0.2.0"
 
 # --- cmd_release end-to-end + guard (Task 2.3) ---
-# end-to-end release 0.2.0 (commit-only, no --push)
+# Register a NON-UNIFORM second plugin (no plugins/brokenplug dir at all) to prove the
+# scoped gate lets demo's release through despite another plugin's pre-existing debt.
+tmp=$(mktemp); jq '.plugins += [{"name":"brokenplug","version":"9.9.9","source":"./plugins/brokenplug","category":"productivity"}]' "$root/.claude-plugin/marketplace.json" > "$tmp" && mv "$tmp" "$root/.claude-plugin/marketplace.json"
+git -C "$root" -c user.email=t@t -c user.name=t commit -aqm "add non-uniform brokenplug entry"
+# end-to-end release 0.2.0 (commit-only, no --push) — MUST succeed despite brokenplug
 assert_pass bash -c 'source '"$HERE"'/../scripts/zorskill-dev.sh --lib; ZORSKILL_ROOT="'"$root"'" cmd_release demo 0.2.0'
 assert_eq "$(jq -r '.plugins[]|select(.name=="demo")|.version' "$root/.claude-plugin/marketplace.json")" "0.2.0" "root entry after release"
 assert_eq "$(jq -r '.version' "$root/.claude-plugin/marketplace.json")" "1.0.1" "aggregate after release"

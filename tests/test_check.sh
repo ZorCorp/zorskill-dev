@@ -44,14 +44,17 @@ echo '{ bad json' > "$r4/plugins/demo/.claude-plugin/plugin.json"
 assert_fail check_json "$r4"
 rm -rf "$r1" "$r2" "$r3" "$r4"
 
-# --- check_both_format (Task 1.4) ---
+# --- check_both_format (Task 1.4; severity refined per option-b) ---
 # PASS when both files present
 b1="$(mktemp -d)"; make_fake_root "$b1" demo 0.1.0 0.1.0
 assert_pass check_both_format "$b1"
-# FAIL when SKILL.md missing
+# missing SKILL.md is now a WARNING (Claude-only plugin), not an ERROR → still PASS
 b2="$(mktemp -d)"; make_fake_root "$b2" demo 0.1.0 0.1.0; rm "$b2/plugins/demo/SKILL.md"
-assert_fail check_both_format "$b2"
-rm -rf "$b1" "$b2"
+assert_pass check_both_format "$b2"
+# missing plugin.json is an ERROR → FAIL
+b3="$(mktemp -d)"; make_fake_root "$b3" demo 0.1.0 0.1.0; rm "$b3/plugins/demo/.claude-plugin/plugin.json"
+assert_fail check_both_format "$b3"
+rm -rf "$b1" "$b2" "$b3"
 
 # --- apply_release_versions (Task 2.2) ---
 # sets plugin entry + auto patch-bumps aggregate

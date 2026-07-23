@@ -2,7 +2,7 @@
 name: zorskill-dev
 description: "Maintainer tooling for the zorskill plugin marketplace. Use when releasing a plugin update (advance its submodule pointer + bump marketplace versions), auditing version drift across all plugins, or scaffolding a new plugin. Commands: /zorskill-dev:check, /zorskill-dev:release, /zorskill-dev:new."
 metadata:
-  version: "0.2.1"
+  version: "0.3.0"
 ---
 
 # zorskill-dev
@@ -18,10 +18,14 @@ that stays each repo's own concern.
 ## Commands
 
 - `/zorskill-dev:check` — audit version drift (root entry vs each plugin's `plugin.json`), JSON validity,
-  both-format presence (`SKILL.md` + `.claude-plugin/plugin.json`), and submodule health.
+  format presence, and submodule health. Severity: a missing `.claude-plugin/plugin.json` is an ERROR
+  (fails); a missing `SKILL.md` is a WARNING (some plugins are intentionally Claude-only). `check` exits
+  non-zero only on ERRORs.
 - `/zorskill-dev:release <name> <x.y.z> [--push]` — advance `<name>`'s submodule pointer to its repo's
   latest, verify the plugin repo actually declares `<x.y.z>`, sync the marketplace versions, validate,
-  and commit. Commit-only by default; `--push` pushes `main`.
+  and commit. The validate step is SCOPED — it hard-fails only on repo-wide JSON validity and the target
+  plugin's own consistency, so another plugin's pre-existing drift never blocks this release (it prints
+  as a warning). Commit-only by default; `--push` pushes `main`.
 - `/zorskill-dev:new <name> [--create-remote]` — clone `ZorCorp/<name>` as a submodule, scaffold
   `plugin.json` + `SKILL.md`, register the marketplace entry, and stage.
 
