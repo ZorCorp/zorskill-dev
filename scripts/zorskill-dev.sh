@@ -59,6 +59,17 @@ check_versions(){
   return $fail
 }
 
+check_both_format(){
+  local root="$1" fail=0 name src d
+  while IFS=$'\t' read -r name src; do
+    d="$root/${src#./}"
+    [[ -f "$d/SKILL.md" ]] || { red "  ✗ $name: missing SKILL.md (agent-skill format)"; fail=1; }
+    [[ -f "$d/.claude-plugin/plugin.json" ]] || { red "  ✗ $name: missing .claude-plugin/plugin.json (Claude-plugin format)"; fail=1; }
+  done < <(_plugins "$root")
+  [[ $fail -eq 0 ]] && green "  ✓ every plugin has SKILL.md + .claude-plugin/plugin.json"
+  return $fail
+}
+
 # ... (functions added in later tasks) ...
 
 main(){

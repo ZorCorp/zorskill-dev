@@ -38,4 +38,13 @@ echo '{ bad json' > "$r4/plugins/demo/.claude-plugin/plugin.json"
 assert_fail check_json "$r4"
 rm -rf "$r1" "$r2" "$r3" "$r4"
 
+# --- check_both_format (Task 1.4) ---
+# PASS when both files present
+b1="$(mktemp -d)"; make_fake_root "$b1" demo 0.1.0 0.1.0
+assert_pass check_both_format "$b1"
+# FAIL when SKILL.md missing
+b2="$(mktemp -d)"; make_fake_root "$b2" demo 0.1.0 0.1.0; rm "$b2/plugins/demo/SKILL.md"
+assert_fail check_both_format "$b2"
+rm -rf "$b1" "$b2"
+
 echo "  ($TESTS_RUN run, $TESTS_FAIL failed)"; [[ $TESTS_FAIL -eq 0 ]]
