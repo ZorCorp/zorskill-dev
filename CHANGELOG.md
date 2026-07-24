@@ -3,6 +3,16 @@
 All notable changes to `zorskill-dev` are documented here. Versioning is semver;
 new capability → minor, fix/docs → patch.
 
+## [0.6.0] - 2026-07-24
+- Add `templates/release.yml` — a tag-driven `Release` GitHub Action (workflow_dispatch with a
+  `version` input) that bumps a plugin repo's own `plugin.json`, commits, tags `v<version>` at the
+  bump, and pushes; the monorepo drift Action (every 30 min) carries it into the marketplace.
+- `/zorskill-dev:new` now also scaffolds `.github/workflows/release.yml` into the new plugin's
+  working tree (uncommitted, like plugin.json/SKILL.md — the user pushes it to the plugin repo).
+- SKILL.md documents the tag-driven self-service flow (`gh workflow run release.yml -f version=x.y.z`
+  → drift carries in within ~30 min, never touching the monorepo) alongside the instant
+  `/zorskill-dev:release` path.
+
 ## [0.5.1] - 2026-07-24
 - Forward-only drift guard: `drift` now advances a plugin ONLY when its repo tip is strictly
   ahead of the marketplace, using a numeric per-component semver comparison (0.10.0 > 0.9.0).

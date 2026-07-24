@@ -2,7 +2,7 @@
 name: zorskill-dev
 description: "Maintainer tooling for the zorskill plugin marketplace. Use when releasing a plugin update (advance its submodule pointer + bump marketplace versions), auditing version drift across all plugins, detecting plugins released in their own repo but not yet carried into the marketplace, keeping the root README Skills table in sync, or scaffolding a new plugin. Commands: /zorskill-dev:check, /zorskill-dev:release, /zorskill-dev:new, /zorskill-dev:sync, /zorskill-dev:drift."
 metadata:
-  version: "0.5.1"
+  version: "0.6.0"
 ---
 
 # zorskill-dev
@@ -28,7 +28,8 @@ that stays each repo's own concern.
   JSON validity and the target plugin's own consistency, so another plugin's pre-existing drift never
   blocks this release (it prints as a warning). Commit-only by default; `--push` pushes `main`.
 - `/zorskill-dev:new <name> [--create-remote]` — clone `ZorCorp/<name>` as a submodule, scaffold
-  `plugin.json` + `SKILL.md`, register the marketplace entry, sync the README Skills table, and stage.
+  `plugin.json` + `SKILL.md` + `.github/workflows/release.yml` (the tag-driven Release workflow),
+  register the marketplace entry, sync the README Skills table, and stage.
 - `/zorskill-dev:sync` — regenerate the managed Skills table in the root `README.md` from
   `marketplace.json` (add missing plugins, drop delisted ones), then re-validate. Use it to fix README
   drift without cutting a release.
@@ -51,11 +52,31 @@ and **curated descriptions are preserved** — a plugin already in the table kee
 a newly added plugin is seeded from the first sentence of its `marketplace.json` description, ready to
 refine. `release`, `new`, and `sync` all regenerate this block; edits outside the markers are untouched.
 
-## Everyday release flow
+## Release flows
 
-1. Edit the plugin in `plugins/<name>/`, commit + push to `ZorCorp/<name>`, bumping its
-   `.claude-plugin/plugin.json` `.version` to `<x.y.z>`.
-2. `/zorskill-dev:release <name> <x.y.z>` — pointer + marketplace bump + commit.
+There are two ways to ship a plugin update. Both start the same way: edit the plugin and push to
+its own repo `ZorCorp/<name>`.
+
+**Tag-driven, self-service (default — you never touch the monorepo).**
+Every plugin repo carries a `Release` GitHub Action (`.github/workflows/release.yml`, scaffolded by
+`/zorskill-dev:new` from `templates/release.yml`). To cut a version, from the plugin repo run:
+
+```
+gh workflow run release.yml -f version=<x.y.z>     # no leading v
+```
+
+That workflow — entirely within the plugin's own repo — bumps its `.claude-plugin/plugin.json`
+`.version`, commits, tags `v<x.y.z>` at the bump commit, and pushes branch + tag. The monorepo
+**drift-detector Action then carries it into the marketplace within ~30 minutes** (it runs every
+30 min): forward-only, check-gated, advancing the submodule pointer + marketplace versions + README.
+You never touch `ZorCorp/zorskill`.
+
+**Manual / instant (no wait).**
+When you don't want to wait for the drift cron:
+
+1. Push the plugin's `.claude-plugin/plugin.json` `.version` bump to `ZorCorp/<name>` (or use the
+   Release workflow above).
+2. `/zorskill-dev:release <name> <x.y.z>` — advances the pointer + marketplace + README, commits.
 3. Review, then `git push origin main` (or pass `--push`).
 
 ## Env

@@ -16,6 +16,11 @@ assert_pass bash -c 'source '"$HERE"'/../scripts/zorskill-dev.sh --lib;
 # submodule scaffolded locally
 assert_eq "$(jq -r .name "$root/plugins/newplug/.claude-plugin/plugin.json")" "newplug" "plugin.json scaffolded"
 assert_pass test -f "$root/plugins/newplug/SKILL.md"
+# tag-driven Release workflow scaffolded into the plugin working tree, from the template
+assert_pass test -f "$root/plugins/newplug/.github/workflows/release.yml"
+assert_pass grep -q "name: Release" "$root/plugins/newplug/.github/workflows/release.yml"
+assert_pass grep -q "gh workflow run release.yml -f version=" "$root/plugins/newplug/.github/workflows/release.yml"
+assert_pass diff -q "$(cd "$HERE/.." && pwd)/templates/release.yml" "$root/plugins/newplug/.github/workflows/release.yml"
 # marketplace entry added + aggregate bumped
 assert_eq "$(jq -r '.plugins[]|select(.name=="newplug")|.version' "$root/.claude-plugin/marketplace.json")" "0.1.0" "entry added"
 assert_eq "$(jq -r '.version' "$root/.claude-plugin/marketplace.json")" "1.0.1" "aggregate bumped"

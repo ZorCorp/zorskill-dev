@@ -453,6 +453,13 @@ cmd_new(){
     render_template "$tdir/plugin.json.tmpl" "$name" "$desc" > "$sub/.claude-plugin/plugin.json"
     render_template "$tdir/SKILL.md.tmpl"   "$name" "$desc" > "$sub/SKILL.md"
   fi
+  # Drop the tag-driven Release workflow into the plugin's own repo (uncommitted, like the
+  # scaffolds above — the user commits+pushes it to ZorCorp/$name). Static template, no subst.
+  if [[ ! -f "$sub/.github/workflows/release.yml" ]]; then
+    echo "▸ scaffold .github/workflows/release.yml (uncommitted in plugins/$name — push it from its own repo)"
+    mkdir -p "$sub/.github/workflows"
+    cp "$tdir/release.yml" "$sub/.github/workflows/release.yml"
+  fi
 
   echo "▸ register in root marketplace.json + bump aggregate"
   local cur agg tmp mf="$root/.claude-plugin/marketplace.json"
@@ -470,9 +477,12 @@ cmd_new(){
   # Stage the gitlink only if the submodule has a commit checked out (empty upstreams don't).
   if git -C "$sub" rev-parse HEAD >/dev/null 2>&1; then git -C "$root" add "plugins/$name"; fi
   green "Scaffolded $name (marketplace $agg). Next:"
-  echo "  1. Fill plugins/$name/SKILL.md + plugin.json, then commit+push them to ZorCorp/$name."
+  echo "  1. Fill plugins/$name/SKILL.md + plugin.json + .github/workflows/release.yml,"
+  echo "     then commit+push all of them to ZorCorp/$name."
   echo "  2. In zorskill: git commit -m 'Add $name plugin' (already staged)."
-  echo "  3. Release updates later with:  /zorskill-dev:release $name <x.y.z>"
+  echo "  3. Release updates from the plugin repo:  gh workflow run release.yml -f version=<x.y.z>"
+  echo "     (the drift Action carries it into the marketplace within ~30 min), or instantly"
+  echo "     with:  /zorskill-dev:release $name <x.y.z>"
 }
 
 # ... (functions added in later tasks) ...
