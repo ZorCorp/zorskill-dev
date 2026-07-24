@@ -296,6 +296,92 @@ cmd_release(){
   fi
 }
 
+# Version declared at a plugin repo's tracked-branch TIP, read tolerantly (grep, not jq)
+# so a version bump lands even when the rest of that commit's plugin.json is malformed —
+# the strict check gate (check_json) then catches structural breakage and aborts.
+_repo_tip_version(){ # $1 root, $2 name, $3 branch
+  git -C "$1/plugins/$2" show "origin/$3:.claude-plugin/plugin.json" 2>/dev/null \
+    | grep -oE '"version"[[:space:]]*:[[:space:]]*"[0-9]+\.[0-9]+\.[0-9]+"' | head -1 \
+    | grep -oE '[0-9]+\.[0-9]+\.[0-9]+'
+}
+
+# Revert ONLY what drift touched (not `.`), so an abort never disturbs unrelated
+# working-tree state (e.g. a locally-dirty sibling plugin).
+_drift_revert(){ # $1 root, $2 space-separated drifted names
+  local root="$1" nm
+  git -C "$root" checkout -- .claude-plugin/marketplace.json 2>/dev/null || true
+  [[ -f "$root/README.md" ]] && git -C "$root" checkout -- README.md 2>/dev/null || true
+  for nm in $2; do
+    git -C "$root" checkout -- "plugins/$nm" 2>/dev/null || true
+    git -C "$root" -c protocol.file.allow=always submodule update --checkout "plugins/$nm" 2>/dev/null || true
+  done
+}
+
+# drift — detect plugins whose OWN repo advanced to a new released version that was never
+# carried into the marketplace, advance them, and (hard-gated on `check`) commit.
+cmd_drift(){
+  local push=0 dryrun=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --push) push=1;;
+      --dry-run) dryrun=1;;
+      *) red "unknown flag: $1"; return 2;;
+    esac; shift
+  done
+  local root; root="$(resolve_root)" || { red "cannot locate zorskill root (set ZORSKILL_ROOT)"; return 1; }
+  local name src sub br tipver curver drifted="" n=0 dr=""
+  [[ $dryrun -eq 1 ]] && dr="(dry-run) "
+  echo "▸ scanning ${dr}plugin repos for released-but-uncarried versions"
+  while IFS=$'\t' read -r name src; do
+    sub="$root/plugins/$name"
+    if [[ ! -d "$sub" ]]; then yellow "  ⚠ $name: submodule not initialized — skipping"; continue; fi
+    git -C "$sub" -c protocol.file.allow=always fetch --quiet origin 2>/dev/null || { yellow "  ⚠ $name: fetch failed — skipping"; continue; }
+    br="$(_sub_branch "$root" "$name")"
+    tipver="$(_repo_tip_version "$root" "$name" "$br")"
+    curver="$(jq -r --arg n "$name" '.plugins[]|select(.name==$n)|.version' "$root/.claude-plugin/marketplace.json")"
+    if is_semver "$tipver" && [[ "$tipver" != "$curver" ]]; then
+      echo "  • $name: marketplace=$curver  repo-tip=$tipver  → DRIFT"
+      drifted="$drifted $name"; n=$((n+1))
+      if [[ $dryrun -eq 0 ]]; then
+        if ! { git -C "$sub" checkout --quiet "origin/$br" 2>/dev/null || git -C "$sub" checkout --quiet "$br"; }; then
+          red "  ✗ $name: checkout failed — reverting, committing nothing"; _drift_revert "$root" "$drifted"; return 1
+        fi
+        local tmp; tmp="$(mktemp)"
+        jq --arg n "$name" --arg v "$tipver" '(.plugins[]|select(.name==$n)|.version)=$v' "$root/.claude-plugin/marketplace.json" > "$tmp" && mv "$tmp" "$root/.claude-plugin/marketplace.json"
+      fi
+    else
+      echo "  • $name: marketplace=$curver  repo-tip=${tipver:-<unreadable>}  ok"
+    fi
+  done < <(_plugins "$root")
+
+  if [[ $n -eq 0 ]]; then green "✓ no drift — all pointers current"; return 0; fi
+  local names; names="$(echo $drifted | sed 's/ /, /g')"
+  if [[ $dryrun -eq 1 ]]; then yellow "dry-run: $n plugin(s) would advance: $names (nothing changed)"; return 0; fi
+
+  local cur agg tmp; cur="$(jq -r '.version' "$root/.claude-plugin/marketplace.json")"; agg="$(_bump_patch "$cur")"
+  tmp="$(mktemp)"; jq --arg a "$agg" '.version=$a' "$root/.claude-plugin/marketplace.json" > "$tmp" && mv "$tmp" "$root/.claude-plugin/marketplace.json"
+  [[ -f "$root/README.md" ]] && _readme_has_markers "$root/README.md" && sync_readme "$root" >/dev/null
+  echo "▸ validate (hard gate — a broken marketplace must never be committed)"
+  if ! ( cd "$root" && cmd_check ); then
+    local bad="" nm
+    for nm in $drifted; do jq -e . "$root/plugins/$nm/.claude-plugin/plugin.json" >/dev/null 2>&1 || bad="$bad $nm"; done
+    red "✗ drift ABORTED — check FAILED. Structurally broken tip(s):${bad:- (see the ✗ line(s) above)} (drifted set:$drifted). Reverting, committing nothing."
+    _drift_revert "$root" "$drifted"
+    return 1
+  fi
+  echo "▸ commit"
+  for name in $drifted; do git -C "$root" add "plugins/$name"; done
+  git -C "$root" add ".claude-plugin/marketplace.json"
+  [[ -f "$root/README.md" ]] && _readme_has_markers "$root/README.md" && git -C "$root" add README.md
+  git -C "$root" commit -q -m "chore(drift): advance $names to their released versions (marketplace $agg)"
+  if [[ $push -eq 1 ]]; then
+    git -C "$root" push origin main && green "Drift resolved: $names (marketplace $agg) — pushed to main."
+  else
+    green "Drift resolved: $names (marketplace $agg) — committed locally."
+    echo "  Push when ready:  git -C \"$root\" push origin main"
+  fi
+}
+
 render_template(){
   local tmpl="$1" name="$2" desc="$3"
   # sed with a safe delimiter; escape & and the delimiter in the replacement.
@@ -384,7 +470,8 @@ main(){
     release) shift; cmd_release "$@";;
     new)     shift; cmd_new "$@";;
     sync)    shift; cmd_sync "$@";;
-    *) echo "usage: $0 {check|release <name> <x.y.z> [--push]|new <name> [--repo-url URL] [--create-remote]|sync}"; exit 2;;
+    drift)   shift; cmd_drift "$@";;
+    *) echo "usage: $0 {check|release <name> <x.y.z> [--push]|new <name> [--repo-url URL] [--create-remote]|sync|drift [--push] [--dry-run]}"; exit 2;;
   esac
 }
 
