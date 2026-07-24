@@ -3,6 +3,15 @@
 All notable changes to `zorskill-dev` are documented here. Versioning is semver;
 new capability → minor, fix/docs → patch.
 
+## [0.7.0] - 2026-07-24
+- Add `templates/claude-release-block.md` — a managed CLAUDE.md block (wrapped in
+  `<!-- BEGIN zorskill-release -->` … `<!-- END zorskill-release -->`) that tells Claude Code,
+  when developing inside a plugin repo, to release via `gh workflow run release.yml` and never
+  hand-edit the version or the marketplace.
+- `/zorskill-dev:new` now also scaffolds that block into the new plugin's `CLAUDE.md`: creates the
+  file if absent; if a `CLAUDE.md` exists without the marker, appends the block (preceded by a blank
+  line) preserving existing content; if the marker is already present, leaves it untouched.
+
 ## [0.6.0] - 2026-07-24
 - Add `templates/release.yml` — a tag-driven `Release` GitHub Action (workflow_dispatch with a
   `version` input) that bumps a plugin repo's own `plugin.json`, commits, tags `v<version>` at the
