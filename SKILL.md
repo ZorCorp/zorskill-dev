@@ -2,7 +2,7 @@
 name: zorskill-dev
 description: "Maintainer tooling for the zorskill plugin marketplace. Use when releasing a plugin update (advance its submodule pointer + bump marketplace versions), auditing version drift across all plugins, detecting plugins released in their own repo but not yet carried into the marketplace, keeping the root README Skills table in sync, or scaffolding a new plugin. Commands: /zorskill-dev:check, /zorskill-dev:release, /zorskill-dev:new, /zorskill-dev:sync, /zorskill-dev:drift."
 metadata:
-  version: "0.5.0"
+  version: "0.5.1"
 ---
 
 # zorskill-dev
@@ -34,11 +34,12 @@ that stays each repo's own concern.
   drift without cutting a release.
 - `/zorskill-dev:drift [--dry-run] [--push]` — detect plugins whose OWN repo was released to a new
   version that was never carried into the marketplace: for each plugin it fetches the repo, reads the
-  version at its tracked-branch tip, and if that's a valid semver different from the marketplace entry,
-  advances the submodule pointer + marketplace entry, patch-bumps the aggregate, syncs the README, and
-  commits — HARD-GATED on `check` (a structurally broken drifted tip aborts and reverts, committing
-  nothing). Commit-only by default; `--push` pushes `main`; `--dry-run` previews and changes nothing.
-  Intended for a scheduled drift-detector Action.
+  version at its tracked-branch tip, and if that tip is strictly AHEAD of the marketplace entry (numeric
+  semver compare — forward-only), advances the submodule pointer + marketplace entry, patch-bumps the
+  aggregate, syncs the README, and commits — HARD-GATED on `check` (a structurally broken drifted tip
+  aborts and reverts, committing nothing). A tip BEHIND the marketplace (revert/force-push) warns and is
+  left unchanged — never downgraded. Commit-only by default; `--push` pushes `main`; `--dry-run` previews
+  and changes nothing. Intended for a scheduled drift-detector Action.
 
 ## README Skills table (managed block)
 

@@ -1,7 +1,7 @@
 {
   "name": "zorskill-dev",
   "description": "Maintainer tooling for the zorskill marketplace: keep every plugin's version in sync, advance submodule pointers, and scaffold new plugins. Aggregation-side only — never pushes to a plugin's own repo.",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "author": {
     "name": "ZorCorp",
     "email": "info@zorcorp.dev"

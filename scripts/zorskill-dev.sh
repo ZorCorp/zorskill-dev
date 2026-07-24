@@ -12,6 +12,15 @@ yellow(){ printf '\033[33m%s\033[0m\n' "$*"; }
 
 is_semver(){ [[ "${1:-}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; }
 
+# _semver_gt A B → exit 0 iff A > B, compared NUMERICALLY per component (so 0.10.0 > 0.9.0).
+_semver_gt(){
+  local a1 a2 a3 b1 b2 b3
+  IFS=. read -r a1 a2 a3 <<<"$1"; IFS=. read -r b1 b2 b3 <<<"$2"
+  if [[ "$a1" -ne "$b1" ]]; then [[ "$a1" -gt "$b1" ]]; return; fi
+  if [[ "$a2" -ne "$b2" ]]; then [[ "$a2" -gt "$b2" ]]; return; fi
+  [[ "$a3" -gt "$b3" ]]
+}
+
 # The aggregate root marketplace has BOTH a .plugins array AND a top-level semver .version.
 # Requiring the semver .version skips per-plugin outliers (e.g. kf-cli's stray marketplace.json,
 # which carries .plugins but a metadata.version instead of a top-level .version).
@@ -339,7 +348,11 @@ cmd_drift(){
     br="$(_sub_branch "$root" "$name")"
     tipver="$(_repo_tip_version "$root" "$name" "$br")"
     curver="$(jq -r --arg n "$name" '.plugins[]|select(.name==$n)|.version' "$root/.claude-plugin/marketplace.json")"
-    if is_semver "$tipver" && [[ "$tipver" != "$curver" ]]; then
+    if is_semver "$tipver" && is_semver "$curver" && _semver_gt "$curver" "$tipver"; then
+      # BEHIND: repo tip is older than the marketplace (revert/force-push, or marketplace manually
+      # ahead). Forward-only — never downgrade. Warn, change nothing, do not count as drift.
+      yellow "  ⚠ $name: repo tip $tipver is BEHIND marketplace $curver — possible revert/force-push; left unchanged, review manually"
+    elif is_semver "$tipver" && _semver_gt "$tipver" "$curver"; then
       echo "  • $name: marketplace=$curver  repo-tip=$tipver  → DRIFT"
       drifted="$drifted $name"; n=$((n+1))
       if [[ $dryrun -eq 0 ]]; then

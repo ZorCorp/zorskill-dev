@@ -72,4 +72,12 @@ rt="$(render_template "$(cd "$HERE/.." && pwd)/templates/plugin.json.tmpl" foo "
 assert_eq "$(echo "$rt" | jq -r .name)" "foo" "template NAME"
 assert_eq "$(echo "$rt" | jq -r .description)" "a: b desc" "template DESCRIPTION"
 
+# --- _semver_gt: numeric per-component comparison (forward-only drift) ---
+assert_pass _semver_gt 0.10.0 0.9.0     # numeric, not string (10 > 9)
+assert_fail _semver_gt 0.9.0 0.10.0
+assert_pass _semver_gt 1.0.0 0.99.99
+assert_fail _semver_gt 1.2.3 1.2.3      # equal is NOT greater
+assert_pass _semver_gt 0.2.1 0.2.0
+assert_fail _semver_gt 0.2.0 0.2.1
+
 echo "  ($TESTS_RUN run, $TESTS_FAIL failed)"; [[ $TESTS_FAIL -eq 0 ]]

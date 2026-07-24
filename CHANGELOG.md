@@ -3,6 +3,12 @@
 All notable changes to `zorskill-dev` are documented here. Versioning is semver;
 new capability → minor, fix/docs → patch.
 
+## [0.5.1] - 2026-07-24
+- Forward-only drift guard: `drift` now advances a plugin ONLY when its repo tip is strictly
+  ahead of the marketplace, using a numeric per-component semver comparison (0.10.0 > 0.9.0).
+  A repo tip that is BEHIND the marketplace (revert/force-push, or marketplace manually ahead)
+  warns and is left unchanged — never downgraded — and does not fail the run.
+
 ## [0.5.0] - 2026-07-24
 - Add `drift` command (`/zorskill-dev:drift [--dry-run] [--push]`): detect plugins whose own
   repo was released to a new version never carried into the marketplace, advance the submodule
