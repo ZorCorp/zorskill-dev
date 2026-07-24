@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+# Tier-A static-fixture tests for README Skills-table sync (no real git).
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$HERE/lib.sh"
+source "$HERE/../scripts/zorskill-dev.sh" --lib
+
+BEGIN='<!-- BEGIN SKILLS (managed by zorskill-dev) -->'
+END='<!-- END SKILLS -->'
+
+# write_market <root> <name:::desc> ...  → marketplace.json + .gitmodules
+write_market(){
+  local root="$1"; shift
+  mkdir -p "$root/.claude-plugin"
+  local js='{"name":"zorskill","version":"1.0.0","plugins":[]}'
+  local pair name desc
+  : > "$root/.gitmodules"
+  for pair in "$@"; do
+    name="${pair%%:::*}"; desc="${pair#*:::}"
+    js="$(printf '%s' "$js" | jq --arg n "$name" --arg d "$desc" '.plugins += [{"name":$n,"version":"1.0.0","source":("./plugins/"+$n),"description":$d}]')"
+    printf '[submodule "plugins/%s"]\n\tpath = plugins/%s\n\turl = https://github.com/ZorCorp/%s.git\n' "$name" "$name" "$name" >> "$root/.gitmodules"
+  done
+  printf '%s\n' "$js" > "$root/.claude-plugin/marketplace.json"
+}
+
+# write_readme <root> <row-line> ...  → README with a managed block containing the rows
+write_readme(){
+  local root="$1"; shift
+  { echo "# zorskill"; echo; echo "## Skills"; echo; echo "$BEGIN"
+    echo "| Skill | Description | Source |"; echo "|-------|-------------|--------|"
+    local r; for r in "$@"; do echo "$r"; done
+    echo "$END"; echo; echo "footer text"; } > "$root/README.md"
+}
+
+# --- sync_readme: add missing row + preserve curated description ---
+r1="$(mktemp -d)"
+write_market "$r1" "demo:::Demo plugin blurb. Extra sentence." "newp:::New plugin seeded. Second sentence."
+write_readme "$r1" '| `demo` | CURATED demo text | [ZorCorp/demo](https://github.com/ZorCorp/demo) |'
+sync_readme "$r1" >/dev/null
+assert_pass grep -qF 'CURATED demo text' "$r1/README.md"     # curated preserved
+assert_fail grep -qF 'Demo plugin blurb' "$r1/README.md"      # NOT overwritten by marketplace text
+assert_pass grep -qF '`newp`' "$r1/README.md"                 # new plugin row added
+assert_pass grep -qF 'New plugin seeded.' "$r1/README.md"     # seeded from first sentence
+assert_fail grep -qF 'Second sentence' "$r1/README.md"        # only first sentence seeded
+rm -rf "$r1"
+
+# --- sync_readme: remove delisted plugin's row ---
+r2="$(mktemp -d)"
+write_market "$r2" "demo:::Demo. x."
+write_readme "$r2" '| `demo` | Demo curated | [ZorCorp/demo](https://github.com/ZorCorp/demo) |' '| `oldp` | Old removed | [ZorCorp/oldp](https://github.com/ZorCorp/oldp) |'
+sync_readme "$r2" >/dev/null
+assert_pass grep -qF '`demo`' "$r2/README.md"
+assert_fail grep -qF '`oldp`' "$r2/README.md"                 # delisted row removed
+rm -rf "$r2"
+
+# --- check_readme: flags drift (missing row = ERROR) ---
+r3="$(mktemp -d)"
+write_market "$r3" "demo:::D. x." "newp:::N. x."
+write_readme "$r3" '| `demo` | d | [ZorCorp/demo](https://github.com/ZorCorp/demo) |'
+assert_fail check_readme "$r3"                                 # newp missing → ERROR
+rm -rf "$r3"
+
+# --- check_readme: flags delisted extra row = ERROR ---
+r4="$(mktemp -d)"
+write_market "$r4" "demo:::D. x."
+write_readme "$r4" '| `demo` | d | [ZorCorp/demo](https://github.com/ZorCorp/demo) |' '| `ghost` | g | [ZorCorp/ghost](https://github.com/ZorCorp/ghost) |'
+assert_fail check_readme "$r4"                                 # ghost not in marketplace → ERROR
+rm -rf "$r4"
+
+# --- check_readme: passes when in sync ---
+r5="$(mktemp -d)"
+write_market "$r5" "demo:::D. x."
+write_readme "$r5" '| `demo` | d | [ZorCorp/demo](https://github.com/ZorCorp/demo) |'
+assert_pass check_readme "$r5"
+rm -rf "$r5"
+
+# --- graceful when no markers (no crash, clear non-zero) ---
+r6="$(mktemp -d)"; mkdir -p "$r6/.claude-plugin"
+write_market "$r6" "demo:::D. x."
+printf '# zorskill\n\nno managed markers here\n' > "$r6/README.md"
+assert_fail check_readme "$r6"
+assert_fail sync_readme "$r6"
+rm -rf "$r6"
+
+# --- idempotency: sync twice = no further change ---
+r7="$(mktemp -d)"
+write_market "$r7" "demo:::Demo. x." "newp:::New. y."
+write_readme "$r7" '| `demo` | curated | [ZorCorp/demo](https://github.com/ZorCorp/demo) |'
+sync_readme "$r7" >/dev/null; cp "$r7/README.md" "$r7/after1"
+sync_readme "$r7" >/dev/null
+assert_pass diff -q "$r7/after1" "$r7/README.md"
+rm -rf "$r7"
+
+echo "  ($TESTS_RUN run, $TESTS_FAIL failed)"; [[ $TESTS_FAIL -eq 0 ]]

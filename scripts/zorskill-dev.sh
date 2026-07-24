@@ -100,12 +100,87 @@ check_submodules(){
   return $fail
 }
 
+# ---- README Skills-table sync (managed block) ----------------------------------
+# The root README.md carries a human-facing Skills table. Only the block between
+# these markers is tool-managed: the ROSTER is authoritative from marketplace.json,
+# but curated descriptions of already-listed plugins are preserved.
+README_BEGIN='<!-- BEGIN SKILLS (managed by zorskill-dev) -->'
+README_END='<!-- END SKILLS -->'
+
+_plugin_repo_url(){ # $1 root, $2 name → repo URL (from .gitmodules; .git stripped)
+  local url; url="$(git config -f "$1/.gitmodules" --get "submodule.plugins/$2.url" 2>/dev/null || true)"
+  [[ -z "$url" ]] && url="https://github.com/ZorCorp/$2.git"
+  echo "${url%.git}"
+}
+_repo_label(){ echo "$1" | sed -E 's#^https?://[^/]+/##; s#\.git$##'; }   # owner/name
+_first_sentence(){ printf '%s' "$1" | sed -E 's/([.])[[:space:]].*/\1/'; }  # up to first ". "
+# Extract the managed block (between markers, exclusive) from $1 to stdout.
+_readme_block(){ awk -v b="$README_BEGIN" -v e="$README_END" 'index($0,b){f=1;next} index($0,e){f=0} f' "$1"; }
+# Description column for plugin $2 from a block file $1 (empty if no row).
+_existing_desc(){
+  awk -F'|' -v n="$2" 'NF>=4 { k=$2; gsub(/[ \t`]/,"",k); if(k==n){ d=$3; sub(/^[ \t]+/,"",d); sub(/[ \t]+$/,"",d); print d; exit } }' "$1"
+}
+# Plugin names present as managed rows in block file $1 (excludes the header row).
+_block_rows(){ awk -F'|' 'NF>=4 && $2 ~ /`/ { k=$2; gsub(/[ \t`]/,"",k); if(k!="Skill") print k }' "$1"; }
+
+_readme_has_markers(){ grep -qF "$README_BEGIN" "$1" && grep -qF "$README_END" "$1"; }
+
+sync_readme(){ # $1 root — regenerate the managed Skills table
+  local root="$1" readme="$1/README.md" name src url label desc old block tmp
+  [[ -f "$readme" ]] || { red "  ✗ README.md not found at $readme"; return 1; }
+  _readme_has_markers "$readme" || { red "  ✗ README.md missing managed markers — add '$README_BEGIN' / '$README_END' around the Skills table"; return 1; }
+  old="$(mktemp)"; _readme_block "$readme" > "$old"
+  block="$(mktemp)"
+  { echo "| Skill | Description | Source |"
+    echo "|-------|-------------|--------|"
+    while IFS=$'\t' read -r name src; do
+      url="$(_plugin_repo_url "$root" "$name")"; label="$(_repo_label "$url")"
+      desc="$(_existing_desc "$old" "$name")"
+      [[ -z "$desc" ]] && desc="$(_first_sentence "$(jq -r --arg n "$name" '.plugins[]|select(.name==$n)|.description // ""' "$root/.claude-plugin/marketplace.json")")"
+      printf '| `%s` | %s | [%s](%s) |\n' "$name" "$desc" "$label" "$url"
+    done < <(_plugins "$root")
+  } > "$block"
+  tmp="$(mktemp)"
+  awk -v b="$README_BEGIN" -v e="$README_END" -v bf="$block" '
+    index($0,b){ print; while((getline line < bf)>0) print line; close(bf); skip=1; next }
+    index($0,e){ skip=0; print; next }
+    !skip { print }
+  ' "$readme" > "$tmp" && mv "$tmp" "$readme"
+  rm -f "$old" "$block"
+  green "  ✓ README Skills table synced ($(_plugins "$root" | grep -c . ) plugins)"
+}
+
+check_readme(){ # $1 root — README roster drift is an ERROR
+  local root="$1" readme="$1/README.md" fail=0 name src old rn
+  [[ -f "$readme" ]] || { red "  ✗ README.md not found (run: zorskill-dev.sh sync)"; return 1; }
+  _readme_has_markers "$readme" || { red "  ✗ README.md missing managed markers (run: zorskill-dev.sh sync)"; return 1; }
+  old="$(mktemp)"; _readme_block "$readme" > "$old"
+  while IFS=$'\t' read -r name src; do
+    grep -qF "\`$name\`" "$old" || { red "  ✗ README missing managed row for: $name (run: zorskill-dev.sh sync)"; fail=1; }
+  done < <(_plugins "$root")
+  while read -r rn; do
+    [[ -z "$rn" ]] && continue
+    jq -e --arg n "$rn" '.plugins[]|select(.name==$n)' "$root/.claude-plugin/marketplace.json" >/dev/null 2>&1 \
+      || { red "  ✗ README lists delisted/unknown plugin: $rn (run: zorskill-dev.sh sync)"; fail=1; }
+  done < <(_block_rows "$old")
+  rm -f "$old"
+  [[ $fail -eq 0 ]] && green "  ✓ README Skills table in sync"
+  return $fail
+}
+
+cmd_sync(){ # regenerate the README managed block, then re-validate
+  local root; root="$(resolve_root)" || { red "cannot locate zorskill root (set ZORSKILL_ROOT)"; return 1; }
+  echo "▸ Sync README Skills table"; sync_readme "$root" || return 1
+  echo "▸ Re-validate"; ( cd "$root" && cmd_check )
+}
+
 cmd_check(){
   local root; root="$(resolve_root)" || { red "cannot locate zorskill root (set ZORSKILL_ROOT)"; exit 1; }
   local rc=0
   echo "▸ JSON validity";                        check_json        "$root" || rc=1
   echo "▸ Version consistency (per-plugin)";      check_versions    "$root" || rc=1
   echo "▸ Both-format presence";                  check_both_format "$root" || rc=1
+  echo "▸ README roster sync";                    check_readme      "$root" || rc=1
   echo "▸ Submodule health";                      check_submodules  "$root" || rc=1
   echo
   if [[ $rc -eq 0 ]]; then green "PASS — marketplace is consistent ($root)"; else red "FAIL — fix the ✗ items above"; fi
@@ -203,10 +278,15 @@ cmd_release(){
     return 1
   fi
   echo "▸ 3/5 sync marketplace versions"; a="$(apply_release_versions "$root" "$name" "$ver" "$agg_override")" || return 1
+  local sync_readme_done=0
+  if [[ -f "$root/README.md" ]] && _readme_has_markers "$root/README.md"; then
+    echo "▸ 3b/5 sync README roster"; sync_readme "$root" && sync_readme_done=1
+  fi
   echo "▸ 4/5 validate (scoped to $name + repo-wide JSON; other plugins' drift is non-blocking)"
   check_release "$root" "$name" "$ver" || { red "check failed for target/JSON — aborting (files bumped; revert or fix)"; return 1; }
   echo "▸ 5/5 commit"
   git -C "$root" add "plugins/$name" ".claude-plugin/marketplace.json"
+  [[ $sync_readme_done -eq 1 ]] && git -C "$root" add README.md
   git -C "$root" commit -q -m "zorskill: $name v$ver (marketplace $a)" || yellow "  (nothing to commit?)"
   if [[ $push -eq 1 ]]; then
     git -C "$root" push origin main && green "Released $name v$ver (marketplace $a) — pushed to main."
@@ -283,6 +363,10 @@ cmd_new(){
     '.version=$a | .plugins += [{"name":$n,"description":$d,"version":"0.1.0","author":{"name":"ZorCorp","url":"https://github.com/ZorCorp"},"source":("./plugins/"+$n),"category":"productivity"}]' \
     "$mf" > "$tmp" && mv "$tmp" "$mf"
 
+  if [[ -f "$root/README.md" ]] && _readme_has_markers "$root/README.md"; then
+    echo "▸ sync README roster"; sync_readme "$root" && git -C "$root" add README.md
+  fi
+
   git -C "$root" add "$root/.gitmodules" ".claude-plugin/marketplace.json" 2>/dev/null
   # Stage the gitlink only if the submodule has a commit checked out (empty upstreams don't).
   if git -C "$sub" rev-parse HEAD >/dev/null 2>&1; then git -C "$root" add "plugins/$name"; fi
@@ -299,7 +383,8 @@ main(){
     check)   shift; cmd_check "$@";;
     release) shift; cmd_release "$@";;
     new)     shift; cmd_new "$@";;
-    *) echo "usage: $0 {check|release <name> <x.y.z> [--push]|new <name> [--repo-url URL] [--create-remote]}"; exit 2;;
+    sync)    shift; cmd_sync "$@";;
+    *) echo "usage: $0 {check|release <name> <x.y.z> [--push]|new <name> [--repo-url URL] [--create-remote]|sync}"; exit 2;;
   esac
 }
 

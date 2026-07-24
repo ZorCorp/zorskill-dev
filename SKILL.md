@@ -1,8 +1,8 @@
 ---
 name: zorskill-dev
-description: "Maintainer tooling for the zorskill plugin marketplace. Use when releasing a plugin update (advance its submodule pointer + bump marketplace versions), auditing version drift across all plugins, or scaffolding a new plugin. Commands: /zorskill-dev:check, /zorskill-dev:release, /zorskill-dev:new."
+description: "Maintainer tooling for the zorskill plugin marketplace. Use when releasing a plugin update (advance its submodule pointer + bump marketplace versions), auditing version drift across all plugins, keeping the root README Skills table in sync, or scaffolding a new plugin. Commands: /zorskill-dev:check, /zorskill-dev:release, /zorskill-dev:new, /zorskill-dev:sync."
 metadata:
-  version: "0.3.1"
+  version: "0.4.0"
 ---
 
 # zorskill-dev
@@ -18,16 +18,30 @@ that stays each repo's own concern.
 ## Commands
 
 - `/zorskill-dev:check` — audit version drift (root entry vs each plugin's `plugin.json`), JSON validity,
-  format presence, and submodule health. Severity: a missing `.claude-plugin/plugin.json` is an ERROR
-  (fails); a missing `SKILL.md` is a WARNING (some plugins are intentionally Claude-only). `check` exits
-  non-zero only on ERRORs.
+  format presence, README roster sync, and submodule health. Severity: a missing `.claude-plugin/plugin.json`
+  is an ERROR (fails); a missing `SKILL.md` is a WARNING (some plugins are intentionally Claude-only).
+  README roster drift (a marketplace plugin missing from the managed Skills table, or a delisted plugin
+  still listed) is an ERROR. `check` exits non-zero only on ERRORs.
 - `/zorskill-dev:release <name> <x.y.z> [--push]` — advance `<name>`'s submodule pointer to its repo's
-  latest, verify the plugin repo actually declares `<x.y.z>`, sync the marketplace versions, validate,
-  and commit. The validate step is SCOPED — it hard-fails only on repo-wide JSON validity and the target
-  plugin's own consistency, so another plugin's pre-existing drift never blocks this release (it prints
-  as a warning). Commit-only by default; `--push` pushes `main`.
+  latest, verify the plugin repo actually declares `<x.y.z>`, sync the marketplace versions, sync the
+  README Skills table, validate, and commit. The validate step is SCOPED — it hard-fails only on repo-wide
+  JSON validity and the target plugin's own consistency, so another plugin's pre-existing drift never
+  blocks this release (it prints as a warning). Commit-only by default; `--push` pushes `main`.
 - `/zorskill-dev:new <name> [--create-remote]` — clone `ZorCorp/<name>` as a submodule, scaffold
-  `plugin.json` + `SKILL.md`, register the marketplace entry, and stage.
+  `plugin.json` + `SKILL.md`, register the marketplace entry, sync the README Skills table, and stage.
+- `/zorskill-dev:sync` — regenerate the managed Skills table in the root `README.md` from
+  `marketplace.json` (add missing plugins, drop delisted ones), then re-validate. Use it to fix README
+  drift without cutting a release.
+
+## README Skills table (managed block)
+
+The root `README.md` carries a human-facing Skills table wrapped in
+`<!-- BEGIN SKILLS (managed by zorskill-dev) -->` … `<!-- END SKILLS -->`. Only that block is
+tool-managed: the **roster** is authoritative from `marketplace.json` (every plugin gets exactly one
+row; delisted plugins are removed), the **Source** link comes from each submodule's `.gitmodules` URL,
+and **curated descriptions are preserved** — a plugin already in the table keeps its hand-written text;
+a newly added plugin is seeded from the first sentence of its `marketplace.json` description, ready to
+refine. `release`, `new`, and `sync` all regenerate this block; edits outside the markers are untouched.
 
 ## Everyday release flow
 
