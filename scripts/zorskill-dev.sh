@@ -343,8 +343,14 @@ cmd_drift(){
   echo "▸ scanning ${dr}plugin repos for released-but-uncarried versions"
   while IFS=$'\t' read -r name src; do
     sub="$root/plugins/$name"
-    if [[ ! -d "$sub" ]]; then yellow "  ⚠ $name: submodule not initialized — skipping"; continue; fi
-    git -C "$sub" -c protocol.file.allow=always fetch --quiet origin 2>/dev/null || { yellow "  ⚠ $name: fetch failed — skipping"; continue; }
+    # Skip any submodule that isn't a usable git checkout here (uninitialized) OR whose remote
+    # can't be fetched (private without a token / offline). General — no per-plugin special-casing.
+    # The scheduled Action deliberately leaves private repos (e.g. gcp-bq) uninitialized; those are
+    # carried in manually via `/zorskill-dev:release`. Non-fatal: not counted as drift, nothing mutated.
+    if [[ ! -e "$sub/.git" ]] || ! git -C "$sub" rev-parse --git-dir >/dev/null 2>&1 \
+       || ! git -C "$sub" -c protocol.file.allow=always fetch --quiet origin 2>/dev/null; then
+      yellow "  ⚠ $name: submodule not initialized or unreachable — skipped"; continue
+    fi
     br="$(_sub_branch "$root" "$name")"
     tipver="$(_repo_tip_version "$root" "$name" "$br")"
     curver="$(jq -r --arg n "$name" '.plugins[]|select(.name==$n)|.version' "$root/.claude-plugin/marketplace.json")"

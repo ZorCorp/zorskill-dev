@@ -3,6 +3,14 @@
 All notable changes to `zorskill-dev` are documented here. Versioning is semver;
 new capability → minor, fix/docs → patch.
 
+## [0.7.1] - 2026-07-27
+- `drift` now skips a submodule that is uninitialized or whose remote can't be fetched (e.g. a
+  private plugin repo the scheduled Action's default token can't clone) — warns, non-fatal, never
+  counted as drift, nothing mutated — instead of failing the run. General: any unreachable/
+  uninitialized submodule is skipped the same way. A private plugin (currently `gcp-bq`) is carried
+  in manually via `/zorskill-dev:release`. Forward-only compare, check-gate, scoped revert,
+  `--push`/`--dry-run` unchanged.
+
 ## [0.7.0] - 2026-07-24
 - Add `templates/claude-release-block.md` — a managed CLAUDE.md block (wrapped in
   `<!-- BEGIN zorskill-release -->` … `<!-- END zorskill-release -->`) that tells Claude Code,

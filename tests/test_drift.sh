@@ -93,4 +93,21 @@ assert_eq "$(git -C "$root" rev-parse HEAD)" "$head0" "dry-run made no commit"
 assert_eq "$(git -C "$root" status --porcelain | grep -c 'plugins/demo\|marketplace')" "0" "dry-run left working tree clean"
 rm -rf "$FIX"
 
+# === 6. uninitialized/unreachable submodule → WARN + SKIP, process reachable, exit 0, no commit ===
+build_fixture   # demo reachable, tip == marketplace 0.1.0 (no drift)
+# register a 'ghost' plugin in marketplace + .gitmodules but leave it UNINITIALIZED (empty dir, no .git)
+tmp=$(mktemp); jq '.plugins += [{"name":"ghost","version":"0.1.0","source":"./plugins/ghost","description":"G. x.","category":"productivity"}]' "$root/.claude-plugin/marketplace.json" > "$tmp" && mv "$tmp" "$root/.claude-plugin/marketplace.json"
+printf '[submodule "plugins/ghost"]\n\tpath = plugins/ghost\n\turl = https://github.com/ZorCorp/ghost.git\n' >> "$root/.gitmodules"
+mkdir -p "$root/plugins/ghost"
+git -C "$root" -c user.email=t@t -c user.name=t add -A
+git -C "$root" -c user.email=t@t -c user.name=t commit -qm "register uninitialized ghost"
+head0="$(git -C "$root" rev-parse HEAD)"
+assert_pass bash -c 'source '"$HERE"'/../scripts/zorskill-dev.sh --lib; ZORSKILL_ROOT="'"$root"'" cmd_drift'   # exit 0 despite uninitialized ghost
+# capture-then-grep via here-string: `... | grep -q` would SIGPIPE the producer under pipefail (141)
+assert_pass bash -c 'source '"$HERE"'/../scripts/zorskill-dev.sh --lib; out="$(ZORSKILL_ROOT="'"$root"'" cmd_drift 2>&1)"; grep -q "ghost: submodule not initialized or unreachable — skipped" <<<"$out"'
+assert_pass bash -c 'source '"$HERE"'/../scripts/zorskill-dev.sh --lib; out="$(ZORSKILL_ROOT="'"$root"'" cmd_drift 2>&1)"; grep -q "demo: marketplace=" <<<"$out"'   # reachable one still processed
+assert_eq "$(git -C "$root" rev-parse HEAD)" "$head0" "uninitialized: no commit"
+assert_eq "$(jq -r '.plugins[]|select(.name=="ghost")|.version' "$root/.claude-plugin/marketplace.json")" "0.1.0" "uninitialized: ghost entry unchanged"
+rm -rf "$FIX"
+
 echo "  ($TESTS_RUN run, $TESTS_FAIL failed)"; [[ $TESTS_FAIL -eq 0 ]]
