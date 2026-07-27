@@ -2,7 +2,7 @@
 name: zorskill-dev
 description: "Maintainer tooling for the zorskill plugin marketplace. Use when releasing a plugin update (advance its submodule pointer + bump marketplace versions), auditing version drift across all plugins, detecting plugins released in their own repo but not yet carried into the marketplace, keeping the root README Skills table in sync, or scaffolding a new plugin. Commands: /zorskill-dev:check, /zorskill-dev:release, /zorskill-dev:new, /zorskill-dev:sync, /zorskill-dev:drift."
 metadata:
-  version: "0.7.1"
+  version: "0.7.2"
 ---
 
 # zorskill-dev
@@ -39,11 +39,13 @@ that stays each repo's own concern.
   version that was never carried into the marketplace: for each plugin it fetches the repo, reads the
   version at its tracked-branch tip, and if that tip is strictly AHEAD of the marketplace entry (numeric
   semver compare — forward-only), advances the submodule pointer + marketplace entry, patch-bumps the
-  aggregate, syncs the README, and commits — HARD-GATED on `check` (a structurally broken drifted tip
-  aborts and reverts, committing nothing). A tip BEHIND the marketplace (revert/force-push) warns and is
-  left unchanged — never downgraded. A submodule that is uninitialized or whose remote can't be fetched
-  (e.g. a private repo the runner has no token for) is skipped with a warning — non-fatal, never counted
-  as drift; such a plugin is carried in manually via `/zorskill-dev:release`. Commit-only by default;
+  aggregate, syncs the README, and commits — HARD-GATED on a SCOPED check: repo-wide JSON validity, each
+  drifted plugin's own consistency (plugin.json == marketplace), and README roster sync. A structurally
+  broken drifted tip aborts and reverts, committing nothing. A tip BEHIND the marketplace (revert/
+  force-push) warns and is left unchanged — never downgraded. A submodule that is uninitialized or whose
+  remote can't be fetched (e.g. a private repo the runner has no token for) is skipped with a warning and
+  is NON-BLOCKING for the gate — so PUBLIC plugins still carry in even while a private/uninitialized one
+  is skipped; the skipped plugin is carried in manually via `/zorskill-dev:release`. Commit-only by default;
   `--push` pushes `main`; `--dry-run` previews and changes nothing. Intended for a scheduled
   drift-detector Action.
 

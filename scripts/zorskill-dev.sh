@@ -316,6 +316,35 @@ _repo_tip_version(){ # $1 root, $2 name, $3 branch
 
 # Revert ONLY what drift touched (not `.`), so an abort never disturbs unrelated
 # working-tree state (e.g. a locally-dirty sibling plugin).
+# Scoped drift gate — like check_release, but over the DRIFTED SET. Hard-fails ONLY on:
+#   (a) repo-wide JSON validity, (b) each drifted plugin's own consistency (plugin.json exists +
+#   plugin.json == marketplace == carried-in version), (c) README roster sync (checkout-independent).
+# Uninitialized/unreachable submodules the scan skipped, and other plugins' pre-existing drift, are
+# NON-blocking warnings — so a public plugin carries in even while a private one is uninitialized.
+check_drift_gate(){ # $1 root, $2 space-separated drifted names
+  local root="$1" drifted="$2" rc=0 nm pj pjver rootver n s d
+  echo "  • repo-wide JSON validity"
+  if check_json "$root" >/dev/null 2>&1; then green "  ✓ JSON valid (repo-wide)"
+  else red "  ✗ repo has invalid JSON — fix before committing:"; check_json "$root"; rc=1; fi
+  echo "  • drifted plugin(s):$drifted"
+  for nm in $drifted; do
+    pj="$root/plugins/$nm/.claude-plugin/plugin.json"
+    rootver="$(jq -r --arg n "$nm" '.plugins[]|select(.name==$n)|.version' "$root/.claude-plugin/marketplace.json")"
+    if [[ ! -f "$pj" ]]; then red "  ✗ $nm: missing .claude-plugin/plugin.json"; rc=1; continue; fi
+    pjver="$(jq -r '.version // ""' "$pj")"
+    if [[ "$pjver" == "$rootver" ]] && is_semver "$rootver"; then green "  ✓ $nm @ $rootver (plugin.json == marketplace)"
+    else red "  ✗ $nm version mismatch — plugin.json='$pjver' marketplace='$rootver'"; rc=1; fi
+  done
+  echo "  • README roster sync"; check_readme "$root" || rc=1
+  # Non-blocking: note any plugin the scan skipped (uninitialized/unreachable) — never gates.
+  while IFS=$'\t' read -r n s; do
+    case " $drifted " in *" $n "*) continue;; esac
+    d="$root/${s#./}"
+    [[ ! -e "$d/.git" && ! -f "$d/.claude-plugin/plugin.json" ]] && yellow "  ⚠ $n: uninitialized/unreachable — not validated (non-blocking)"
+  done < <(_plugins "$root")
+  return $rc
+}
+
 _drift_revert(){ # $1 root, $2 space-separated drifted names
   local root="$1" nm
   git -C "$root" checkout -- .claude-plugin/marketplace.json 2>/dev/null || true
@@ -380,11 +409,11 @@ cmd_drift(){
   local cur agg tmp; cur="$(jq -r '.version' "$root/.claude-plugin/marketplace.json")"; agg="$(_bump_patch "$cur")"
   tmp="$(mktemp)"; jq --arg a "$agg" '.version=$a' "$root/.claude-plugin/marketplace.json" > "$tmp" && mv "$tmp" "$root/.claude-plugin/marketplace.json"
   [[ -f "$root/README.md" ]] && _readme_has_markers "$root/README.md" && sync_readme "$root" >/dev/null
-  echo "▸ validate (hard gate — a broken marketplace must never be committed)"
-  if ! ( cd "$root" && cmd_check ); then
+  echo "▸ validate (scoped gate — drifted plugins + repo-wide JSON + README; uninitialized/other plugins non-blocking)"
+  if ! check_drift_gate "$root" "$drifted"; then
     local bad="" nm
     for nm in $drifted; do jq -e . "$root/plugins/$nm/.claude-plugin/plugin.json" >/dev/null 2>&1 || bad="$bad $nm"; done
-    red "✗ drift ABORTED — check FAILED. Structurally broken tip(s):${bad:- (see the ✗ line(s) above)} (drifted set:$drifted). Reverting, committing nothing."
+    red "✗ drift ABORTED — gate FAILED. Structurally broken tip(s):${bad:- (see the ✗ line(s) above)} (drifted set:$drifted). Reverting, committing nothing."
     _drift_revert "$root" "$drifted"
     return 1
   fi

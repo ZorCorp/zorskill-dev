@@ -3,6 +3,15 @@
 All notable changes to `zorskill-dev` are documented here. Versioning is semver;
 new capability → minor, fix/docs → patch.
 
+## [0.7.2] - 2026-07-27
+- Scope `drift`'s validate gate (mirrors `check_release` for `release`, applied to the DRIFTED SET):
+  hard-fails ONLY on repo-wide JSON validity, each drifted plugin's own consistency (plugin.json ==
+  marketplace == carried-in version), and README roster sync. Uninitialized/unreachable submodules
+  (skipped by the scan) and other plugins' pre-existing drift are non-blocking warnings — so a PUBLIC
+  plugin carries in AND commits even while a private one (e.g. `gcp-bq`) is uninitialized. A
+  structurally broken drifted tip still aborts + reverts (repo-wide JSON check catches it).
+  Supersedes 0.7.1.
+
 ## [0.7.1] - 2026-07-27
 - `drift` now skips a submodule that is uninitialized or whose remote can't be fetched (e.g. a
   private plugin repo the scheduled Action's default token can't clone) — warns, non-fatal, never
