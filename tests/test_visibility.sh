@@ -59,4 +59,12 @@ _have_gh(){ return 1; }
 lo="$(check_labels "$L" 2>&1)"; assert_pass grep -q "reconciliation skipped" <<<"$lo"
 rm -rf "$L"
 
+# --- url-form remote (v0.8.1): visibility + label probes resolve owner/repo from source.url ---
+u="$(mktemp -d)"; make_fake_root "$u" demo 1.0.0 1.0.0
+tmp=$(mktemp); jq '.plugins += [{"name":"urlrem","description":"U. x.","version":"9.9.9","source":{"source":"url","url":"https://github.com/ZorCorp/urlrem.git"}}]' "$u/.claude-plugin/marketplace.json" > "$tmp" && mv "$tmp" "$u/.claude-plugin/marketplace.json"
+_have_gh(){ return 0; }; _repo_visibility(){ case "$1" in */urlrem) echo private;; *) echo public;; esac; }
+assert_pass check_visibility "$u"     # demo public submodule + urlrem private REMOTE (url form) → OK
+lo="$(check_labels "$u" 2>&1)"; assert_pass grep -q "urlrem: private but not labeled" <<<"$lo"   # label probe resolved the url-form repo
+rm -rf "$u"
+
 echo "  ($TESTS_RUN run, $TESTS_FAIL failed)"; [[ $TESTS_FAIL -eq 0 ]]

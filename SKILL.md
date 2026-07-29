@@ -2,7 +2,7 @@
 name: zorskill-dev
 description: "Maintainer tooling for the zorskill plugin marketplace. Use when releasing a plugin update (advance its submodule pointer + bump marketplace versions), auditing version drift across all plugins, detecting plugins released in their own repo but not yet carried into the marketplace, keeping the root README Skills table in sync, or scaffolding a new plugin. Commands: /zorskill-dev:check, /zorskill-dev:release, /zorskill-dev:new, /zorskill-dev:sync, /zorskill-dev:drift."
 metadata:
-  version: "0.8.0"
+  version: "0.8.1"
 ---
 
 # zorskill-dev
@@ -62,8 +62,12 @@ A marketplace plugin's `source` can be either kind — the tooling supports both
   submodule plugin repo **MUST be public** — a single private submodule 404s and aborts the whole
   install for everyone. These are the tool-managed plugins: `check`/`release`/`new`/`drift` operate on
   them.
-- **Remote-sourced** — `source` is an object, e.g. `{"source":"github","repo":"ZorCorp/<name>"}` (or
-  `url`/git-subdir/npm). `/plugin marketplace add` only reads `marketplace.json`; a remote-source plugin
+- **Remote-sourced** — `source` is an object. Prefer the explicit-URL form
+  `{"source":"url","url":"https://github.com/ZorCorp/<name>.git"}` — it clones over **HTTPS** (works
+  anonymously for public repos, credential-helper for private). Avoid `{"source":"github","repo":"…"}`:
+  it clones over **SSH** (`git@github.com:…`), which fails at `/plugin install` for users without SSH
+  keys **even for public repos** — `check` warns on it. `/plugin marketplace add` only reads
+  `marketplace.json`; a remote-source plugin
   is cloned at **`/plugin install`** time with the user's own credentials, so it may be **public OR
   private** (private installs per-access — fine). Remote plugins have no submodule on disk and are NOT
   tool-managed: `check`'s version/both-format/submodule checks skip them (info line only); `release`/

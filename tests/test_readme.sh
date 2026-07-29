@@ -134,4 +134,15 @@ assert_pass diff -q "$lk/a1" "$lk/README.md"
 _have_gh(){ return 1; }   # restore offline default
 rm -rf "$lk"
 
+# --- url-form remote (v0.8.1): sync derives the Source link from source.url (.git stripped) ---
+uu="$(mktemp -d)"; mkdir -p "$uu/.claude-plugin"
+cat > "$uu/.claude-plugin/marketplace.json" <<'J'
+{"name":"zorskill","version":"1.0.0","plugins":[
+ {"name":"urlp","version":"1.0.0","source":{"source":"url","url":"https://github.com/ZorCorp/urlp.git"},"description":"Url plugin. x."}]}
+J
+: > "$uu/.gitmodules"
+write_readme "$uu"; sync_readme "$uu" >/dev/null
+assert_pass grep -qF '[ZorCorp/urlp](https://github.com/ZorCorp/urlp)' "$uu/README.md"   # link from source.url
+rm -rf "$uu"
+
 echo "  ($TESTS_RUN run, $TESTS_FAIL failed)"; [[ $TESTS_FAIL -eq 0 ]]

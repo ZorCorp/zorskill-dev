@@ -89,4 +89,19 @@ assert_pass check_versions "$mx"       # rem skipped (remote, no local plugin.js
 assert_pass check_both_format "$mx"    # rem skipped; demo has plugin.json → PASS
 rm -rf "$mx"
 
+# --- source transport hygiene + url-form resolution (v0.8.1) ---
+src="$(mktemp -d)"; make_fake_root "$src" demo 1.0.0 1.0.0
+tmp=$(mktemp); jq '.plugins += [
+  {"name":"ghs","source":{"source":"github","repo":"ZorCorp/ghs"},"description":"gh. x."},
+  {"name":"urls","source":{"source":"url","url":"https://github.com/ZorCorp/urls.git"},"description":"url. x."}]' "$src/.claude-plugin/marketplace.json" > "$tmp" && mv "$tmp" "$src/.claude-plugin/marketplace.json"
+so="$(check_sources "$src" 2>&1)"
+assert_pass grep -q "ghs: 'github' source clones over SSH" <<<"$so"   # github form → footgun WARN
+assert_fail grep -q "urls:" <<<"$so"                                  # url form → no warn
+assert_pass check_sources "$src"                                      # WARN-only: returns 0
+# url-form entries classify as remote AND resolve owner/repo from the URL
+assert_fail _is_submodule "$src" urls
+assert_eq "$(_remote_repo "$src" urls)" "ZorCorp/urls" "url-form owner/repo parsed from source.url"
+assert_eq "$(_remote_source_url "$src" urls)" "https://github.com/ZorCorp/urls" ".git stripped from url link"
+rm -rf "$src"
+
 echo "  ($TESTS_RUN run, $TESTS_FAIL failed)"; [[ $TESTS_FAIL -eq 0 ]]

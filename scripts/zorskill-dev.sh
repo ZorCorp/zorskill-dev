@@ -54,11 +54,12 @@ _is_submodule(){ # $1 root, $2 name → 0 if submodule-managed
     && git config -f "$1/.gitmodules" --get "submodule.plugins/$2.path" >/dev/null 2>&1
 }
 # https repo URL for a remote-sourced plugin (github .repo → github.com/<repo>, else .url), or empty.
-_remote_source_url(){ jq -r --arg n "$2" '.plugins[]|select(.name==$n)|.source | if type=="object" then (if .repo then "https://github.com/"+.repo elif .url then .url else "" end) else "" end' "$1/.claude-plugin/marketplace.json"; }
+_remote_source_url(){ jq -r --arg n "$2" '.plugins[]|select(.name==$n)|.source | if type=="object" then (if .repo then "https://github.com/"+.repo elif .url then (.url | sub("\\.git$";"")) else "" end) else "" end' "$1/.claude-plugin/marketplace.json"; }
 # Short descriptor for info lines, e.g. "github:ZorCorp/gcp-bq".
 _remote_source_desc(){ jq -r --arg n "$2" '.plugins[]|select(.name==$n)|.source | if type=="object" then ((.source // "remote")+":"+(.repo // .url // "?")) else "remote" end' "$1/.claude-plugin/marketplace.json"; }
 # owner/name for a remote GITHUB source (to probe visibility), empty otherwise.
-_remote_repo(){ jq -r --arg n "$2" '.plugins[]|select(.name==$n)|.source | if type=="object" then (.repo // "") else "" end' "$1/.claude-plugin/marketplace.json"; }
+# owner/name to probe visibility — from source.repo (github form) OR parsed from a github source.url.
+_remote_repo(){ jq -r --arg n "$2" '.plugins[]|select(.name==$n)|.source | if type=="object" then (if .repo then .repo elif ((.url // "") | test("^https?://github\\.com/")) then (.url | sub("^https?://github\\.com/";"") | sub("\\.git$";"")) else "" end) else "" end' "$1/.claude-plugin/marketplace.json"; }
 
 check_json(){
   local root="$1" fail=0 f name src   # name/src MUST be local: check_json runs inside
@@ -282,6 +283,23 @@ check_labels(){ # $1 root
   return 0   # WARNINGS only — never fails check
 }
 
+# Source-transport hygiene (pure marketplace.json inspection, no network). A remote entry with
+# `"source":"github"` makes Claude Code clone over SSH (git@github.com:…), which fails for users
+# without SSH keys — even for PUBLIC repos. The explicit-URL form clones over HTTPS (anonymous for
+# public, credential-helper for private). WARN only — never fails check.
+check_sources(){ # $1 root
+  local root="$1" name src kind warned=0
+  while IFS=$'\t' read -r name src; do
+    kind="$(jq -r --arg n "$name" '.plugins[]|select(.name==$n)|.source | if type=="object" then (.source // "") else "" end' "$root/.claude-plugin/marketplace.json")"
+    if [[ "$kind" == "github" ]]; then
+      yellow "  ⚠ $name: 'github' source clones over SSH (fails for users without SSH keys, even for public repos) — use {\"source\":\"url\",\"url\":\"https://github.com/<owner>/<repo>.git\"} instead"
+      warned=1
+    fi
+  done < <(_plugins "$root")
+  [[ $warned -eq 0 ]] && green "  ✓ no SSH-cloning 'github' sources (public-install safe)"
+  return 0   # WARN only — never fails check
+}
+
 cmd_check(){
   local root; root="$(resolve_root)" || { red "cannot locate zorskill root (set ZORSKILL_ROOT)"; exit 1; }
   local rc=0
@@ -291,6 +309,7 @@ cmd_check(){
   echo "▸ README roster sync";                    check_readme      "$root" || rc=1
   echo "▸ Repo visibility (must be public)";      check_visibility  "$root" || rc=1
   echo "▸ Private-label reconciliation";          check_labels      "$root"          # WARN-only
+  echo "▸ Source transport (public-install safe)"; check_sources    "$root"          # WARN-only
   echo "▸ Submodule health";                      check_submodules  "$root" || rc=1
   echo
   if [[ $rc -eq 0 ]]; then green "PASS — marketplace is consistent ($root)"; else red "FAIL — fix the ✗ items above"; fi

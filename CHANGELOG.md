@@ -3,6 +3,15 @@
 All notable changes to `zorskill-dev` are documented here. Versioning is semver;
 new capability → minor, fix/docs → patch.
 
+## [0.8.1] - 2026-07-29
+- `check` warns (never fails) on the SSH-clone footgun: a remote entry with `"source":"github"` makes
+  Claude Code clone over SSH (`git@github.com:…`), which fails at `/plugin install` for users without
+  SSH keys even for PUBLIC repos. Fix is the explicit-URL form
+  `{"source":"url","url":"https://github.com/<owner>/<repo>.git"}` (HTTPS). Pure marketplace.json
+  inspection — no network.
+- The visibility/label probes and README Source link now resolve a remote plugin's owner/repo from
+  `source.url` (parsing a github https URL) as well as `source.repo`, so `url`-form entries work.
+
 ## [0.8.0] - 2026-07-29
 - Mixed-source marketplace support. A plugin is SUBMODULE-managed iff its `source` is a local `./`
   path string AND it's in `.gitmodules`; otherwise it's REMOTE-sourced (object `source`:
