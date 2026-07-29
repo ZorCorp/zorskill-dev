@@ -2,7 +2,7 @@
 name: zorskill-dev
 description: "Maintainer tooling for the zorskill plugin marketplace. Use when releasing a plugin update (advance its submodule pointer + bump marketplace versions), auditing version drift across all plugins, detecting plugins released in their own repo but not yet carried into the marketplace, keeping the root README Skills table in sync, or scaffolding a new plugin. Commands: /zorskill-dev:check, /zorskill-dev:release, /zorskill-dev:new, /zorskill-dev:sync, /zorskill-dev:drift."
 metadata:
-  version: "0.7.3"
+  version: "0.8.0"
 ---
 
 # zorskill-dev
@@ -28,7 +28,8 @@ that stays each repo's own concern.
   latest, verify the plugin repo actually declares `<x.y.z>`, sync the marketplace versions, sync the
   README Skills table, validate, and commit. The validate step is SCOPED — it hard-fails only on repo-wide
   JSON validity and the target plugin's own consistency, so another plugin's pre-existing drift never
-  blocks this release (it prints as a warning). Commit-only by default; `--push` pushes `main`.
+  blocks this release (it prints as a warning). Manages SUBMODULE plugins only — refuses a
+  remote-sourced plugin (edit its marketplace version by hand). Commit-only by default; `--push` pushes `main`.
 - `/zorskill-dev:new <name> [--create-remote] [--allow-private]` — clone `ZorCorp/<name>` as a submodule
   and scaffold four things into the plugin's own working tree: `plugin.json`, `SKILL.md`, the tag-driven
   `.github/workflows/release.yml`, and a managed **release rule in `CLAUDE.md`** (created if absent;
@@ -52,17 +53,30 @@ that stays each repo's own concern.
   `--push` pushes `main`; `--dry-run` previews and changes nothing. Intended for a scheduled
   drift-detector Action.
 
-## Plugin repos must be PUBLIC
+## Mixed-source marketplaces (submodule vs remote)
 
-Every plugin in the marketplace is a git submodule, and `/plugin marketplace add ZorCorp/zorskill`
-recursively clones **every** plugin repo on the end user's machine. A single **private** plugin repo
-makes that clone 404 and **aborts the whole install for every user**. So marketplace plugin repos must
-be public. Guardrails: `/zorskill-dev:check` flags any plugin whose repo is private as an ERROR, and
-`/zorskill-dev:new` refuses a private repo unless `--allow-private` is passed. Both probe visibility via
-`gh api repos/<owner>/<name> --jq .visibility` — best-effort: if `gh` is missing or the API is
-unreachable, the probe is skipped with a note (it never fails on lack of network); only a **confirmed**
-`private` is an error/refusal. A repo that must stay private is delisted and carried in manually via
-`/zorskill-dev:release` into a private marketplace, or added with `new --allow-private`.
+A marketplace plugin's `source` can be either kind — the tooling supports both:
+
+- **Submodule-managed** — `source` is a local path string (`"./plugins/<name>"`) AND the plugin is in
+  `.gitmodules`. `/plugin marketplace add` recursively clones it on **every** end user's machine, so a
+  submodule plugin repo **MUST be public** — a single private submodule 404s and aborts the whole
+  install for everyone. These are the tool-managed plugins: `check`/`release`/`new`/`drift` operate on
+  them.
+- **Remote-sourced** — `source` is an object, e.g. `{"source":"github","repo":"ZorCorp/<name>"}` (or
+  `url`/git-subdir/npm). `/plugin marketplace add` only reads `marketplace.json`; a remote-source plugin
+  is cloned at **`/plugin install`** time with the user's own credentials, so it may be **public OR
+  private** (private installs per-access — fine). Remote plugins have no submodule on disk and are NOT
+  tool-managed: `check`'s version/both-format/submodule checks skip them (info line only); `release`/
+  `new` refuse them; `drift` never tries to advance them. `sync` still lists them in the README (Source
+  link from `source.repo`/`url`).
+
+**Rule of thumb: a plugin that must stay private has to be REMOTE-sourced, never a submodule.**
+
+Guardrails: `/zorskill-dev:check` flags a **private SUBMODULE** repo as an ERROR (probing
+`gh api repos/<owner>/<name> --jq .visibility`), but a **private REMOTE** source is fine (noted, never
+an error). `/zorskill-dev:new` refuses a private repo unless `--allow-private`. Both probes are
+best-effort: if `gh` is missing or the API is unreachable, the probe is skipped with a note (never fails
+on lack of network); only a **confirmed** `private` submodule is an error/refusal.
 
 ## README Skills table (managed block)
 

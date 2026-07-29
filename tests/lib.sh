@@ -21,4 +21,6 @@ JSON
 { "name":"$name","description":"x","version":"$pjver" }
 JSON
   printf -- '---\nname: %s\ndescription: "x"\n---\n' "$name" > "$root/plugins/$name/SKILL.md"
+  # Register in .gitmodules so _is_submodule classifies it as SUBMODULE-managed (not remote).
+  printf '[submodule "plugins/%s"]\n\tpath = plugins/%s\n\turl = https://github.com/ZorCorp/%s.git\n' "$name" "$name" "$name" > "$root/.gitmodules"
 }

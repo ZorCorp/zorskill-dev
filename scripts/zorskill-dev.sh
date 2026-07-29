@@ -39,7 +39,26 @@ resolve_root(){
 }
 
 # Emit each plugin's name + source path, one "name<TAB>path" per line.
-_plugins(){ jq -r '.plugins[] | "\(.name)\t\(.source)"' "$1/.claude-plugin/marketplace.json"; }
+# Emit "name<TAB>src" per plugin. src = the string source (e.g. ./plugins/<name>) for a local entry,
+# or empty when .source is an OBJECT (remote-sourced: github/url/git-subdir/npm). @tsv keeps object
+# sources from corrupting the tab-delimited stream. Consumers classify with _is_submodule.
+_plugins(){ jq -r '.plugins[] | [.name, (if (.source|type)=="string" then .source else "" end)] | @tsv' "$1/.claude-plugin/marketplace.json"; }
+
+# A marketplace is now MIXED-SOURCE. A plugin is SUBMODULE-MANAGED iff its .source is a local "./"
+# string path AND it is registered in .gitmodules; everything else (object source github/url/…, or a
+# string path not in .gitmodules) is REMOTE-SOURCED — it has no submodule on disk and installs at
+# `/plugin install` time with the user's own creds, so it may be public OR private.
+_is_submodule(){ # $1 root, $2 name → 0 if submodule-managed
+  [[ "$(jq -r --arg n "$2" '.plugins[]|select(.name==$n)|.source|type' "$1/.claude-plugin/marketplace.json")" == "string" ]] \
+    && [[ "$(jq -r --arg n "$2" '.plugins[]|select(.name==$n)|.source' "$1/.claude-plugin/marketplace.json")" == ./* ]] \
+    && git config -f "$1/.gitmodules" --get "submodule.plugins/$2.path" >/dev/null 2>&1
+}
+# https repo URL for a remote-sourced plugin (github .repo → github.com/<repo>, else .url), or empty.
+_remote_source_url(){ jq -r --arg n "$2" '.plugins[]|select(.name==$n)|.source | if type=="object" then (if .repo then "https://github.com/"+.repo elif .url then .url else "" end) else "" end' "$1/.claude-plugin/marketplace.json"; }
+# Short descriptor for info lines, e.g. "github:ZorCorp/gcp-bq".
+_remote_source_desc(){ jq -r --arg n "$2" '.plugins[]|select(.name==$n)|.source | if type=="object" then ((.source // "remote")+":"+(.repo // .url // "?")) else "remote" end' "$1/.claude-plugin/marketplace.json"; }
+# owner/name for a remote GITHUB source (to probe visibility), empty otherwise.
+_remote_repo(){ jq -r --arg n "$2" '.plugins[]|select(.name==$n)|.source | if type=="object" then (.repo // "") else "" end' "$1/.claude-plugin/marketplace.json"; }
 
 check_json(){
   local root="$1" fail=0 f name src   # name/src MUST be local: check_json runs inside
@@ -47,7 +66,8 @@ check_json(){
     jq -e . "$f" >/dev/null 2>&1 || { red "  ✗ invalid JSON: ${f#$root/}"; fail=1; }  # local name).
   done
   while IFS=$'\t' read -r name src; do
-    f="$root/${src#./}/.claude-plugin/plugin.json"
+    _is_submodule "$root" "$name" || continue   # remote-sourced: no local plugin.json to validate
+    f="$root/plugins/$name/.claude-plugin/plugin.json"
     [[ -f "$f" ]] || continue
     jq -e . "$f" >/dev/null 2>&1 || { red "  ✗ invalid JSON: plugins/$name/.claude-plugin/plugin.json"; fail=1; }
   done < <(_plugins "$root")
@@ -61,8 +81,9 @@ check_versions(){
   if is_semver "$agg"; then green "  ✓ aggregate .version present ($agg)"
   else red "  ✗ aggregate top-level .version missing or not semver: '$agg'"; fail=1; fi
   while IFS=$'\t' read -r name src; do
+    if ! _is_submodule "$root" "$name"; then echo "  · $name: remote-sourced ($(_remote_source_desc "$root" "$name")) — not submodule-managed"; continue; fi
     root_ver="$(jq -r --arg n "$name" '.plugins[]|select(.name==$n)|.version' "$root/.claude-plugin/marketplace.json")"
-    local pj="$root/${src#./}/.claude-plugin/plugin.json"
+    local pj="$root/plugins/$name/.claude-plugin/plugin.json"
     if [[ ! -f "$pj" ]]; then red "  ✗ $name: missing .claude-plugin/plugin.json"; fail=1; continue; fi
     pj_ver="$(jq -r '.version // ""' "$pj")"
     if [[ "$root_ver" == "$pj_ver" ]] && is_semver "$root_ver"; then green "  ✓ $name @ $root_ver"
@@ -76,11 +97,12 @@ check_both_format(){
   # missing SKILL.md = WARNING (some plugins are intentionally Claude-only, e.g. code-to-video).
   local root="$1" fail=0 name src d
   while IFS=$'\t' read -r name src; do
-    d="$root/${src#./}"
+    _is_submodule "$root" "$name" || continue   # remote-sourced: no local files to check
+    d="$root/plugins/$name"
     [[ -f "$d/SKILL.md" ]] || yellow "  ⚠ $name: no SKILL.md (agent-skill format) — Claude-only plugin, not blocking"
     [[ -f "$d/.claude-plugin/plugin.json" ]] || { red "  ✗ $name: missing .claude-plugin/plugin.json (Claude-plugin format)"; fail=1; }
   done < <(_plugins "$root")
-  [[ $fail -eq 0 ]] && green "  ✓ every plugin has .claude-plugin/plugin.json (SKILL.md optional — warnings above, if any)"
+  [[ $fail -eq 0 ]] && green "  ✓ every submodule plugin has .claude-plugin/plugin.json (SKILL.md optional — warnings above, if any)"
   return $fail
 }
 
@@ -96,10 +118,11 @@ check_submodules(){
       '+') yellow "  ⚠ submodule pointer differs from index (uncommitted pointer move): $path";;
     esac
   done < <(git -C "$root" submodule status 2>/dev/null)
-  # Dirty worktrees inside plugin submodules
+  # Dirty worktrees inside plugin submodules (submodule-managed only)
   local name src d
   while IFS=$'\t' read -r name src; do
-    d="$root/${src#./}"
+    _is_submodule "$root" "$name" || continue
+    d="$root/plugins/$name"
     [[ -d "$d/.git" || -f "$d/.git" ]] || continue
     if [[ -n "$(git -C "$d" status --porcelain 2>/dev/null)" ]]; then
       yellow "  ⚠ uncommitted changes inside plugins/$name (commit/push to its own repo before releasing)"
@@ -143,10 +166,14 @@ sync_readme(){ # $1 root — regenerate the managed Skills table
   { echo "| Skill | Description | Source |"
     echo "|-------|-------------|--------|"
     while IFS=$'\t' read -r name src; do
-      url="$(_plugin_repo_url "$root" "$name")"; label="$(_repo_label "$url")"
+      # Source link: submodule → .gitmodules URL; remote → marketplace source.repo/url.
+      if _is_submodule "$root" "$name"; then url="$(_plugin_repo_url "$root" "$name")"
+      else url="$(_remote_source_url "$root" "$name")"; fi
+      if [[ -n "$url" ]]; then label="$(_repo_label "$url")"; else label="$name"; fi
       desc="$(_existing_desc "$old" "$name")"
       [[ -z "$desc" ]] && desc="$(_first_sentence "$(jq -r --arg n "$name" '.plugins[]|select(.name==$n)|.description // ""' "$root/.claude-plugin/marketplace.json")")"
-      printf '| `%s` | %s | [%s](%s) |\n' "$name" "$desc" "$label" "$url"
+      if [[ -n "$url" ]]; then printf '| `%s` | %s | [%s](%s) |\n' "$name" "$desc" "$label" "$url"
+      else printf '| `%s` | %s | %s |\n' "$name" "$desc" "$label"; fi
     done < <(_plugins "$root")
   } > "$block"
   tmp="$(mktemp)"
@@ -190,20 +217,33 @@ cmd_sync(){ # regenerate the README managed block, then re-validate
 _have_gh(){ command -v gh >/dev/null 2>&1; }                       # overridable in tests
 _repo_visibility(){ gh api "repos/$1" --jq '.visibility' 2>/dev/null; }  # prints public|private|internal or empty; overridable in tests
 
-check_visibility(){ # $1 root — private plugin repos = ERROR (best-effort; needs gh + network)
+check_visibility(){ # $1 root — a PRIVATE repo is an ERROR only for a SUBMODULE-managed plugin
+  # (a private submodule breaks `/plugin marketplace add` — recursive clone 404s). A private REMOTE
+  # source is FINE (it installs per-access at `/plugin install`) — noted, never an error.
   local root="$1" fail=0 name src url path vis
-  if ! _have_gh; then yellow "  · repo visibility not checked (gh not installed) — ensure every plugin repo is PUBLIC"; return 0; fi
+  if ! _have_gh; then yellow "  · repo visibility not checked (gh not installed) — ensure every SUBMODULE plugin repo is PUBLIC"; return 0; fi
   while IFS=$'\t' read -r name src; do
-    url="$(_plugin_repo_url "$root" "$name")"; path="$(_repo_label "$url")"
-    vis="$(_repo_visibility "$path" || true)"
-    case "$vis" in
-      private) red "  ✗ $name: repo is PRIVATE — this breaks \`/plugin marketplace add\` for end users (recursive submodule clone 404s). Make it public or delist it."; fail=1;;
-      public)  : ;;
-      "")      yellow "  · $name: visibility unknown (gh api failed/offline) — skipped";;
-      *)       yellow "  · $name: visibility '$vis' (not public) — verify end users can clone it";;
-    esac
+    if _is_submodule "$root" "$name"; then
+      url="$(_plugin_repo_url "$root" "$name")"; path="$(_repo_label "$url")"
+      vis="$(_repo_visibility "$path" || true)"
+      case "$vis" in
+        private) red "  ✗ $name: SUBMODULE repo is PRIVATE — this breaks \`/plugin marketplace add\` for end users (recursive clone 404s). Make it public, or relist it as a REMOTE source."; fail=1;;
+        public)  : ;;
+        "")      yellow "  · $name: visibility unknown (gh api failed/offline) — skipped";;
+        *)       yellow "  · $name: visibility '$vis' (not public) — verify end users can clone it";;
+      esac
+    else
+      # remote-sourced: private is expected/allowed (per-access install). Best-effort note only.
+      local rp; rp="$(_remote_repo "$root" "$name")"
+      vis="$([[ -n "$rp" ]] && _repo_visibility "$rp" || true)"
+      case "$vis" in
+        private) echo "  · $name: remote private ($(_remote_source_desc "$root" "$name")) — installs per-access, OK";;
+        public)  echo "  · $name: remote public ($(_remote_source_desc "$root" "$name")) — OK";;
+        *)       echo "  · $name: remote-sourced ($(_remote_source_desc "$root" "$name")) — installs per-access";;
+      esac
+    fi
   done < <(_plugins "$root")
-  [[ $fail -eq 0 ]] && green "  ✓ no confirmed-private plugin repos"
+  [[ $fail -eq 0 ]] && green "  ✓ no confirmed-private SUBMODULE plugin repos"
   return $fail
 }
 
@@ -302,6 +342,12 @@ cmd_release(){
   local root; root="$(resolve_root)" || { red "cannot locate zorskill root (set ZORSKILL_ROOT)"; return 1; }
   jq -e --arg n "$name" '.plugins[]|select(.name==$n)' "$root/.claude-plugin/marketplace.json" >/dev/null 2>&1 \
     || { red "not a registered plugin: $name"; return 1; }
+  # Refuse a remote-sourced plugin BEFORE any git submodule op (prevents an orphan plugins/<name> gitlink).
+  if ! _is_submodule "$root" "$name"; then
+    red "✗ $name is remote-sourced ($(_remote_source_desc "$root" "$name")), not a submodule — release manages submodules only."
+    red "  Edit its marketplace version by hand, or convert it to a submodule. (No submodule was created.)"
+    return 1
+  fi
 
   echo "▸ 1/5 advance submodule pointer"; advance_pointer "$root" "$name" || return 1
   local declared; declared="$(read_plugin_version "$root" "$name")"
@@ -361,10 +407,11 @@ check_drift_gate(){ # $1 root, $2 space-separated drifted names
     else red "  ✗ $nm version mismatch — plugin.json='$pjver' marketplace='$rootver'"; rc=1; fi
   done
   echo "  • README roster sync"; check_readme "$root" || rc=1
-  # Non-blocking: note any plugin the scan skipped (uninitialized/unreachable) — never gates.
+  # Non-blocking: note any plugin the scan skipped (remote-sourced, or uninitialized/unreachable).
   while IFS=$'\t' read -r n s; do
     case " $drifted " in *" $n "*) continue;; esac
-    d="$root/${s#./}"
+    if ! _is_submodule "$root" "$n"; then yellow "  ⚠ $n: remote-sourced — not submodule-managed (non-blocking)"; continue; fi
+    d="$root/plugins/$n"
     [[ ! -e "$d/.git" && ! -f "$d/.claude-plugin/plugin.json" ]] && yellow "  ⚠ $n: uninitialized/unreachable — not validated (non-blocking)"
   done < <(_plugins "$root")
   return $rc
@@ -396,11 +443,13 @@ cmd_drift(){
   [[ $dryrun -eq 1 ]] && dr="(dry-run) "
   echo "▸ scanning ${dr}plugin repos for released-but-uncarried versions"
   while IFS=$'\t' read -r name src; do
+    # Remote-sourced entries have no submodule to advance — never treat them as "missing submodule".
+    if ! _is_submodule "$root" "$name"; then echo "  · $name: remote-sourced ($(_remote_source_desc "$root" "$name")) — not submodule-managed, skipped"; continue; fi
     sub="$root/plugins/$name"
     # Skip any submodule that isn't a usable git checkout here (uninitialized) OR whose remote
     # can't be fetched (private without a token / offline). General — no per-plugin special-casing.
-    # The scheduled Action deliberately leaves private repos (e.g. gcp-bq) uninitialized; those are
-    # carried in manually via `/zorskill-dev:release`. Non-fatal: not counted as drift, nothing mutated.
+    # The scheduled Action deliberately leaves private repos uninitialized; those are carried in
+    # manually via `/zorskill-dev:release`. Non-fatal: not counted as drift, nothing mutated.
     if [[ ! -e "$sub/.git" ]] || ! git -C "$sub" rev-parse --git-dir >/dev/null 2>&1 \
        || ! git -C "$sub" -c protocol.file.allow=always fetch --quiet origin 2>/dev/null; then
       yellow "  ⚠ $name: submodule not initialized or unreachable — skipped"; continue
@@ -480,8 +529,11 @@ cmd_new(){
     esac; shift
   done
   local root; root="$(resolve_root)" || { red "cannot locate zorskill root (set ZORSKILL_ROOT)"; return 1; }
-  jq -e --arg n "$name" '.plugins[]|select(.name==$n)' "$root/.claude-plugin/marketplace.json" >/dev/null 2>&1 \
-    && { red "plugin already registered: $name"; return 1; }
+  if jq -e --arg n "$name" '.plugins[]|select(.name==$n)' "$root/.claude-plugin/marketplace.json" >/dev/null 2>&1; then
+    if _is_submodule "$root" "$name"; then red "plugin already registered: $name"
+    else red "$name is already registered as a REMOTE source ($(_remote_source_desc "$root" "$name")), not a submodule — new/release manage submodules only. (No submodule was created.)"; fi
+    return 1
+  fi
   [[ -n "$url" ]] || url="https://github.com/ZorCorp/$name.git"
   [[ -n "$desc" ]] || desc="TODO one-line description of $name"
 

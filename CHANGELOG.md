@@ -3,6 +3,21 @@
 All notable changes to `zorskill-dev` are documented here. Versioning is semver;
 new capability → minor, fix/docs → patch.
 
+## [0.8.0] - 2026-07-29
+- Mixed-source marketplace support. A plugin is SUBMODULE-managed iff its `source` is a local `./`
+  path string AND it's in `.gitmodules`; otherwise it's REMOTE-sourced (object `source`:
+  github/url/git-subdir/npm), cloned at `/plugin install` with the user's creds (so it may be public
+  OR private). Changes:
+  - `check`: version-consistency, both-format, and submodule-health run only for submodule plugins;
+    remote plugins get an info line, not a "missing plugin.json" error. `check_visibility` flags a
+    private SUBMODULE as an ERROR but treats a private REMOTE source as fine (noted). Roster/README
+    check expects all plugins (submodule + remote).
+  - `sync`: emits a README row for every plugin incl. remote-sourced, with the Source link derived
+    from `source.repo` (github) / `source.url` (not `.gitmodules`). Curated descriptions preserved.
+  - `release` / `new`: refuse a remote-sourced plugin name with a clear message, BEFORE any git op,
+    so no orphan `plugins/<name>` gitlink is created.
+  - `drift`: never treats a remote-sourced entry as a missing submodule or tries to advance it.
+
 ## [0.7.3] - 2026-07-29
 - Private-repo guardrail. A private plugin repo breaks `/plugin marketplace add` for every end user
   (Claude Code recursively clones each plugin submodule and 404s on any it can't reach). `check` now

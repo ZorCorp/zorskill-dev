@@ -71,7 +71,7 @@ tmp=$(mktemp); jq '(.plugins[]|select(.name=="demo")|.version)="0.2.0"' "$root/.
 git -C "$root" -c user.email=t@t -c user.name=t commit -aqm "manually bump marketplace ahead"
 head0="$(git -C "$root" rev-parse HEAD)"
 assert_pass bash -c 'source '"$HERE"'/../scripts/zorskill-dev.sh --lib; ZORSKILL_ROOT="'"$root"'" cmd_drift'   # exit 0 despite behind
-assert_pass bash -c 'source '"$HERE"'/../scripts/zorskill-dev.sh --lib; ZORSKILL_ROOT="'"$root"'" cmd_drift 2>&1 | grep -q "BEHIND"'   # prints warning
+assert_pass bash -c 'source '"$HERE"'/../scripts/zorskill-dev.sh --lib; out="$(ZORSKILL_ROOT="'"$root"'" cmd_drift 2>&1)"; grep -q "BEHIND" <<<"$out"'   # prints warning
 assert_eq "$(jq -r '.plugins[]|select(.name=="demo")|.version' "$root/.claude-plugin/marketplace.json")" "0.2.0" "behind: marketplace NOT downgraded"
 assert_eq "$(git -C "$root" rev-parse HEAD)" "$head0" "behind: no commit"
 assert_eq "$(git -C "$root" status --porcelain | grep -c 'plugins/demo\|marketplace')" "0" "behind: working tree clean"

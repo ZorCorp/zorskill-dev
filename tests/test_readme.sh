@@ -90,4 +90,25 @@ sync_readme "$r7" >/dev/null
 assert_pass diff -q "$r7/after1" "$r7/README.md"
 rm -rf "$r7"
 
+# --- mixed source: sync emits a row for a REMOTE plugin with the link from source.repo; idempotent ---
+rmx="$(mktemp -d)"; mkdir -p "$rmx/.claude-plugin"
+cat > "$rmx/.claude-plugin/marketplace.json" <<'J'
+{"name":"zorskill","version":"1.0.0","plugins":[
+ {"name":"demo","version":"1.0.0","source":"./plugins/demo","description":"Demo. x."},
+ {"name":"rem","version":"9.9.9","source":{"source":"github","repo":"ZorCorp/rem"},"description":"Remote plugin blurb. More."}]}
+J
+printf '[submodule "plugins/demo"]\n\tpath = plugins/demo\n\turl = https://github.com/ZorCorp/demo.git\n' > "$rmx/.gitmodules"
+write_readme "$rmx"
+sync_readme "$rmx" >/dev/null
+assert_pass grep -qF '`rem`' "$rmx/README.md"                                         # remote plugin gets a row
+assert_pass grep -qF '[ZorCorp/rem](https://github.com/ZorCorp/rem)' "$rmx/README.md" # Source link from source.repo
+assert_pass grep -qF 'Remote plugin blurb.' "$rmx/README.md"                          # seeded from marketplace desc
+assert_pass check_readme "$rmx"                                                        # roster in sync (submodule + remote)
+# curate the remote row's description, sync again → preserved, README unchanged (idempotent)
+sed -i.bak 's/Remote plugin blurb./CURATED remote text/' "$rmx/README.md"; rm -f "$rmx/README.md.bak"
+cp "$rmx/README.md" "$rmx/after1"; sync_readme "$rmx" >/dev/null
+assert_pass diff -q "$rmx/after1" "$rmx/README.md"
+assert_pass grep -qF 'CURATED remote text' "$rmx/README.md"
+rm -rf "$rmx"
+
 echo "  ($TESTS_RUN run, $TESTS_FAIL failed)"; [[ $TESTS_FAIL -eq 0 ]]

@@ -65,4 +65,9 @@ assert_pass bash -c '! jq -e ".plugins[]|select(.name==\"privplug\")" "'"$root"'
 assert_pass bash -c 'source '"$HERE"'/../scripts/zorskill-dev.sh --lib; _have_gh(){ return 0; }; _repo_visibility(){ echo private; }; ZORSKILL_ROOT="'"$root"'" cmd_new privplug --repo-url "'"$bare4"'" --allow-private'
 assert_pass bash -c 'jq -e ".plugins[]|select(.name==\"privplug\")" "'"$root"'/.claude-plugin/marketplace.json" >/dev/null 2>&1'
 
+# --- mixed source: `new` REFUSES a name already registered as a REMOTE source; no orphan gitlink ---
+tmp=$(mktemp); jq '.plugins += [{"name":"remx","version":"1.0.0","source":{"source":"github","repo":"ZorCorp/remx"},"description":"R. x."}]' "$root/.claude-plugin/marketplace.json" > "$tmp" && mv "$tmp" "$root/.claude-plugin/marketplace.json"
+assert_fail bash -c 'source '"$HERE"'/../scripts/zorskill-dev.sh --lib; _have_gh(){ return 1; }; ZORSKILL_ROOT="'"$root"'" cmd_new remx --repo-url "'"$bare"'"'
+assert_pass bash -c '! test -e "'"$root"'/plugins/remx"'   # no orphan plugins/remx
+
 echo "  ($TESTS_RUN run, $TESTS_FAIL failed)"; rm -rf "$FIX"; [[ $TESTS_FAIL -eq 0 ]]

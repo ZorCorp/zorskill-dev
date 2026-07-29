@@ -45,4 +45,10 @@ assert_pass bash -c 'git -C "'"$root"'" log -1 --pretty=%s | grep -q "zorskill: 
 # guard: asking for a version the plugin repo does NOT declare must abort
 assert_fail bash -c 'source '"$HERE"'/../scripts/zorskill-dev.sh --lib; ZORSKILL_ROOT="'"$root"'" cmd_release demo 9.9.9'
 
+# --- mixed source: `release` REFUSES a remote-sourced plugin and creates NO orphan gitlink ---
+tmp=$(mktemp); jq '.plugins += [{"name":"rem","version":"1.0.0","source":{"source":"github","repo":"ZorCorp/rem"},"description":"R. x."}]' "$root/.claude-plugin/marketplace.json" > "$tmp" && mv "$tmp" "$root/.claude-plugin/marketplace.json"
+git -C "$root" -c user.email=t@t -c user.name=t commit -aqm "add remote rem"
+assert_fail bash -c 'source '"$HERE"'/../scripts/zorskill-dev.sh --lib; ZORSKILL_ROOT="'"$root"'" cmd_release rem 1.0.0'
+assert_pass bash -c '! test -e "'"$root"'/plugins/rem"'   # no orphan plugins/rem gitlink/dir
+
 echo "  ($TESTS_RUN run, $TESTS_FAIL failed)"; rm -rf "$FIX"; [[ $TESTS_FAIL -eq 0 ]]

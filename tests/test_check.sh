@@ -80,4 +80,13 @@ assert_fail _semver_gt 1.2.3 1.2.3      # equal is NOT greater
 assert_pass _semver_gt 0.2.1 0.2.0
 assert_fail _semver_gt 0.2.0 0.2.1
 
+# --- mixed source: submodule vs remote classification + checks skip remote entries ---
+mx="$(mktemp -d)"; make_fake_root "$mx" demo 1.0.0 1.0.0
+tmp=$(mktemp); jq '.plugins += [{"name":"rem","description":"R. x.","version":"9.9.9","source":{"source":"github","repo":"ZorCorp/rem"}}]' "$mx/.claude-plugin/marketplace.json" > "$tmp" && mv "$tmp" "$mx/.claude-plugin/marketplace.json"
+assert_pass _is_submodule "$mx" demo
+assert_fail _is_submodule "$mx" rem
+assert_pass check_versions "$mx"       # rem skipped (remote, no local plugin.json); demo ok → PASS
+assert_pass check_both_format "$mx"    # rem skipped; demo has plugin.json → PASS
+rm -rf "$mx"
+
 echo "  ($TESTS_RUN run, $TESTS_FAIL failed)"; [[ $TESTS_FAIL -eq 0 ]]
