@@ -78,6 +78,12 @@ an error). `/zorskill-dev:new` refuses a private repo unless `--allow-private`. 
 best-effort: if `gh` is missing or the API is unreachable, the probe is skipped with a note (never fails
 on lack of network); only a **confirmed** `private` submodule is an error/refusal.
 
+**Private labeling.** An access-gated (private) plugin's marketplace `description` is prefixed with the
+marker `🔒 Private (ZorCorp members only) — ` so users see it in the listing. `check` reconciles that
+label against actual repo visibility (WARN-only, never auto-edited): a private repo whose description
+isn't 🔒-labeled → warn to add the marker; a public repo that still carries a stale 🔒 → warn to drop it.
+`sync` shows a 🔒 on confirmed-private plugins' README rows. Both are best-effort (skipped offline).
+
 ## README Skills table (managed block)
 
 The root `README.md` carries a human-facing Skills table wrapped in

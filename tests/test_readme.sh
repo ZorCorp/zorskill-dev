@@ -4,6 +4,10 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HERE/lib.sh"
 source "$HERE/../scripts/zorskill-dev.sh" --lib
 
+# Keep sync offline by default: no gh → sync skips its 🔒 visibility probe. A dedicated test below
+# overrides _have_gh/_repo_visibility to exercise the 🔒 marker.
+_have_gh(){ return 1; }
+
 BEGIN='<!-- BEGIN SKILLS (managed by zorskill-dev) -->'
 END='<!-- END SKILLS -->'
 
@@ -110,5 +114,24 @@ cp "$rmx/README.md" "$rmx/after1"; sync_readme "$rmx" >/dev/null
 assert_pass diff -q "$rmx/after1" "$rmx/README.md"
 assert_pass grep -qF 'CURATED remote text' "$rmx/README.md"
 rm -rf "$rmx"
+
+# --- sync marks a confirmed-private plugin's row with 🔒 (best-effort, gated on gh); idempotent ---
+lk="$(mktemp -d)"; mkdir -p "$lk/.claude-plugin"
+cat > "$lk/.claude-plugin/marketplace.json" <<'J'
+{"name":"zorskill","version":"1.0.0","plugins":[
+ {"name":"pubp","version":"1.0.0","source":{"source":"github","repo":"ZorCorp/pubp"},"description":"Public plugin. x."},
+ {"name":"privp","version":"1.0.0","source":{"source":"github","repo":"ZorCorp/privp"},"description":"Private plugin. x."}]}
+J
+: > "$lk/.gitmodules"
+write_readme "$lk"
+_have_gh(){ return 0; }; _repo_visibility(){ case "$1" in */privp) echo private;; *) echo public;; esac; }
+sync_readme "$lk" >/dev/null
+assert_pass grep -qF '| `privp` | 🔒 ' "$lk/README.md"     # confirmed-private row marked with 🔒
+assert_fail grep -qF '| `pubp` | 🔒'  "$lk/README.md"      # public row NOT marked
+# idempotent: a second sync doesn't add a second 🔒
+cp "$lk/README.md" "$lk/a1"; sync_readme "$lk" >/dev/null
+assert_pass diff -q "$lk/a1" "$lk/README.md"
+_have_gh(){ return 1; }   # restore offline default
+rm -rf "$lk"
 
 echo "  ($TESTS_RUN run, $TESTS_FAIL failed)"; [[ $TESTS_FAIL -eq 0 ]]

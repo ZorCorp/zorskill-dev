@@ -3,6 +3,7 @@
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HERE/lib.sh"
 source "$HERE/../scripts/zorskill-dev.sh" --lib
+_have_gh(){ return 1; }   # keep fixture sync offline (no gh probe)
 
 GB='<!-- BEGIN SKILLS (managed by zorskill-dev) -->'
 GE='<!-- END SKILLS -->'
@@ -39,7 +40,7 @@ push_tip(){
 # === 1. detects drift, advances pointer, sets marketplace, syncs README, commits ===
 build_fixture; push_tip 0.2.0
 head0="$(git -C "$root" rev-parse HEAD)"
-assert_pass bash -c 'source '"$HERE"'/../scripts/zorskill-dev.sh --lib; ZORSKILL_ROOT="'"$root"'" cmd_drift'
+assert_pass bash -c 'source '"$HERE"'/../scripts/zorskill-dev.sh --lib; _have_gh(){ return 1; }; ZORSKILL_ROOT="'"$root"'" cmd_drift'
 assert_eq "$(jq -r '.plugins[]|select(.name=="demo")|.version' "$root/.claude-plugin/marketplace.json")" "0.2.0" "marketplace entry advanced"
 assert_eq "$(jq -r '.version' "$root/.claude-plugin/marketplace.json")" "1.0.1" "aggregate bumped"
 assert_eq "$(read_plugin_version "$root" demo)" "0.2.0" "submodule pointer advanced"
@@ -51,14 +52,14 @@ rm -rf "$FIX"
 build_fixture; push_tip 0.2.0
 ( source "$HERE/../scripts/zorskill-dev.sh" --lib; ZORSKILL_ROOT="$root" cmd_drift >/dev/null 2>&1 )
 head1="$(git -C "$root" rev-parse HEAD)"
-assert_pass bash -c 'source '"$HERE"'/../scripts/zorskill-dev.sh --lib; ZORSKILL_ROOT="'"$root"'" cmd_drift'   # exit 0
+assert_pass bash -c 'source '"$HERE"'/../scripts/zorskill-dev.sh --lib; _have_gh(){ return 1; }; ZORSKILL_ROOT="'"$root"'" cmd_drift'   # exit 0
 assert_eq "$(git -C "$root" rev-parse HEAD)" "$head1" "no new commit on second run"
 rm -rf "$FIX"
 
 # === 3. broken tip: version bumped but plugin.json malformed → ABORT on check gate, clean ===
 build_fixture; push_tip 0.2.0 'GARBAGE_BROKEN'
 head0="$(git -C "$root" rev-parse HEAD)"
-assert_fail bash -c 'source '"$HERE"'/../scripts/zorskill-dev.sh --lib; ZORSKILL_ROOT="'"$root"'" cmd_drift'   # aborts non-zero
+assert_fail bash -c 'source '"$HERE"'/../scripts/zorskill-dev.sh --lib; _have_gh(){ return 1; }; ZORSKILL_ROOT="'"$root"'" cmd_drift'   # aborts non-zero
 assert_eq "$(git -C "$root" rev-parse HEAD)" "$head0" "no commit made on abort"
 assert_eq "$(jq -r '.plugins[]|select(.name=="demo")|.version' "$root/.claude-plugin/marketplace.json")" "0.1.0" "marketplace reverted"
 assert_eq "$(git -C "$root" status --porcelain | wc -l | tr -d ' ')" "0" "working tree clean after abort"
@@ -70,8 +71,8 @@ build_fixture   # repo tip + pinned + marketplace all 0.1.0
 tmp=$(mktemp); jq '(.plugins[]|select(.name=="demo")|.version)="0.2.0"' "$root/.claude-plugin/marketplace.json" > "$tmp" && mv "$tmp" "$root/.claude-plugin/marketplace.json"
 git -C "$root" -c user.email=t@t -c user.name=t commit -aqm "manually bump marketplace ahead"
 head0="$(git -C "$root" rev-parse HEAD)"
-assert_pass bash -c 'source '"$HERE"'/../scripts/zorskill-dev.sh --lib; ZORSKILL_ROOT="'"$root"'" cmd_drift'   # exit 0 despite behind
-assert_pass bash -c 'source '"$HERE"'/../scripts/zorskill-dev.sh --lib; out="$(ZORSKILL_ROOT="'"$root"'" cmd_drift 2>&1)"; grep -q "BEHIND" <<<"$out"'   # prints warning
+assert_pass bash -c 'source '"$HERE"'/../scripts/zorskill-dev.sh --lib; _have_gh(){ return 1; }; ZORSKILL_ROOT="'"$root"'" cmd_drift'   # exit 0 despite behind
+assert_pass bash -c 'source '"$HERE"'/../scripts/zorskill-dev.sh --lib; _have_gh(){ return 1; }; out="$(ZORSKILL_ROOT="'"$root"'" cmd_drift 2>&1)"; grep -q "BEHIND" <<<"$out"'   # prints warning
 assert_eq "$(jq -r '.plugins[]|select(.name=="demo")|.version' "$root/.claude-plugin/marketplace.json")" "0.2.0" "behind: marketplace NOT downgraded"
 assert_eq "$(git -C "$root" rev-parse HEAD)" "$head0" "behind: no commit"
 assert_eq "$(git -C "$root" status --porcelain | grep -c 'plugins/demo\|marketplace')" "0" "behind: working tree clean"
@@ -80,14 +81,14 @@ rm -rf "$FIX"
 # === 4. no drift → exit 0, no commit ===
 build_fixture   # tip == pinned 0.1.0
 head0="$(git -C "$root" rev-parse HEAD)"
-assert_pass bash -c 'source '"$HERE"'/../scripts/zorskill-dev.sh --lib; ZORSKILL_ROOT="'"$root"'" cmd_drift'
+assert_pass bash -c 'source '"$HERE"'/../scripts/zorskill-dev.sh --lib; _have_gh(){ return 1; }; ZORSKILL_ROOT="'"$root"'" cmd_drift'
 assert_eq "$(git -C "$root" rev-parse HEAD)" "$head0" "no commit when no drift"
 rm -rf "$FIX"
 
 # === 5. --dry-run changes nothing ===
 build_fixture; push_tip 0.2.0
 head0="$(git -C "$root" rev-parse HEAD)"
-assert_pass bash -c 'source '"$HERE"'/../scripts/zorskill-dev.sh --lib; ZORSKILL_ROOT="'"$root"'" cmd_drift --dry-run'
+assert_pass bash -c 'source '"$HERE"'/../scripts/zorskill-dev.sh --lib; _have_gh(){ return 1; }; ZORSKILL_ROOT="'"$root"'" cmd_drift --dry-run'
 assert_eq "$(jq -r '.plugins[]|select(.name=="demo")|.version' "$root/.claude-plugin/marketplace.json")" "0.1.0" "dry-run left marketplace untouched"
 assert_eq "$(git -C "$root" rev-parse HEAD)" "$head0" "dry-run made no commit"
 assert_eq "$(git -C "$root" status --porcelain | grep -c 'plugins/demo\|marketplace')" "0" "dry-run left working tree clean"
@@ -102,10 +103,10 @@ mkdir -p "$root/plugins/ghost"
 git -C "$root" -c user.email=t@t -c user.name=t add -A
 git -C "$root" -c user.email=t@t -c user.name=t commit -qm "register uninitialized ghost"
 head0="$(git -C "$root" rev-parse HEAD)"
-assert_pass bash -c 'source '"$HERE"'/../scripts/zorskill-dev.sh --lib; ZORSKILL_ROOT="'"$root"'" cmd_drift'   # exit 0 despite uninitialized ghost
+assert_pass bash -c 'source '"$HERE"'/../scripts/zorskill-dev.sh --lib; _have_gh(){ return 1; }; ZORSKILL_ROOT="'"$root"'" cmd_drift'   # exit 0 despite uninitialized ghost
 # capture-then-grep via here-string: `... | grep -q` would SIGPIPE the producer under pipefail (141)
-assert_pass bash -c 'source '"$HERE"'/../scripts/zorskill-dev.sh --lib; out="$(ZORSKILL_ROOT="'"$root"'" cmd_drift 2>&1)"; grep -q "ghost: submodule not initialized or unreachable — skipped" <<<"$out"'
-assert_pass bash -c 'source '"$HERE"'/../scripts/zorskill-dev.sh --lib; out="$(ZORSKILL_ROOT="'"$root"'" cmd_drift 2>&1)"; grep -q "demo: marketplace=" <<<"$out"'   # reachable one still processed
+assert_pass bash -c 'source '"$HERE"'/../scripts/zorskill-dev.sh --lib; _have_gh(){ return 1; }; out="$(ZORSKILL_ROOT="'"$root"'" cmd_drift 2>&1)"; grep -q "ghost: submodule not initialized or unreachable — skipped" <<<"$out"'
+assert_pass bash -c 'source '"$HERE"'/../scripts/zorskill-dev.sh --lib; _have_gh(){ return 1; }; out="$(ZORSKILL_ROOT="'"$root"'" cmd_drift 2>&1)"; grep -q "demo: marketplace=" <<<"$out"'   # reachable one still processed
 assert_eq "$(git -C "$root" rev-parse HEAD)" "$head0" "uninitialized: no commit"
 assert_eq "$(jq -r '.plugins[]|select(.name=="ghost")|.version' "$root/.claude-plugin/marketplace.json")" "0.1.0" "uninitialized: ghost entry unchanged"
 rm -rf "$FIX"
@@ -119,7 +120,7 @@ mkdir -p "$root/plugins/ghost"
 git -C "$root" -c user.email=t@t -c user.name=t add -A
 git -C "$root" -c user.email=t@t -c user.name=t commit -qm "register uninitialized ghost"
 head0="$(git -C "$root" rev-parse HEAD)"
-assert_pass bash -c 'source '"$HERE"'/../scripts/zorskill-dev.sh --lib; ZORSKILL_ROOT="'"$root"'" cmd_drift'   # exit 0 — carries in demo despite uninitialized ghost
+assert_pass bash -c 'source '"$HERE"'/../scripts/zorskill-dev.sh --lib; _have_gh(){ return 1; }; ZORSKILL_ROOT="'"$root"'" cmd_drift'   # exit 0 — carries in demo despite uninitialized ghost
 assert_eq "$(jq -r '.plugins[]|select(.name=="demo")|.version' "$root/.claude-plugin/marketplace.json")" "0.2.0" "scoped gate: demo carried in"
 assert_eq "$(read_plugin_version "$root" demo)" "0.2.0" "scoped gate: demo pointer advanced"
 assert_pass bash -c '[ "$(git -C "'"$root"'" rev-parse HEAD)" != "'"$head0"'" ]'   # a commit was made

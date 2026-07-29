@@ -40,4 +40,23 @@ _repo_visibility(){ echo private; }    # demo (submodule) now private too
 assert_fail check_visibility "$m"
 rm -rf "$m"
 
+# --- private-label (🔒) reconciliation (check_labels) — WARN only, never fails ---
+L="$(mktemp -d)"; make_fake_root "$L" demo 1.0.0 1.0.0
+_have_gh(){ return 0; }
+# private repo + UNLABELED description → WARN
+_repo_visibility(){ echo private; }
+lo="$(check_labels "$L" 2>&1)"; assert_pass grep -q "private but not labeled" <<<"$lo"
+assert_pass check_labels "$L"   # warn-only: still returns 0
+# private repo + LABELED description → clean (no warning)
+tmp=$(mktemp); jq '(.plugins[]|select(.name=="demo")|.description)="🔒 Private (ZorCorp members only) — Demo."' "$L/.claude-plugin/marketplace.json" > "$tmp" && mv "$tmp" "$L/.claude-plugin/marketplace.json"
+lo="$(check_labels "$L" 2>&1)"; assert_fail grep -q "private but not labeled" <<<"$lo"
+assert_pass grep -q "private labels match" <<<"$lo"
+# PUBLIC repo but still LABELED private → WARN (stale label)
+_repo_visibility(){ echo public; }
+lo="$(check_labels "$L" 2>&1)"; assert_pass grep -q "labeled private but its repo is public" <<<"$lo"
+# gh absent → reconciliation gracefully skipped (returns 0, no warning)
+_have_gh(){ return 1; }
+lo="$(check_labels "$L" 2>&1)"; assert_pass grep -q "reconciliation skipped" <<<"$lo"
+rm -rf "$L"
+
 echo "  ($TESTS_RUN run, $TESTS_FAIL failed)"; [[ $TESTS_FAIL -eq 0 ]]

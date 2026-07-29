@@ -172,6 +172,12 @@ sync_readme(){ # $1 root — regenerate the managed Skills table
       if [[ -n "$url" ]]; then label="$(_repo_label "$url")"; else label="$name"; fi
       desc="$(_existing_desc "$old" "$name")"
       [[ -z "$desc" ]] && desc="$(_first_sentence "$(jq -r --arg n "$name" '.plugins[]|select(.name==$n)|.description // ""' "$root/.claude-plugin/marketplace.json")")"
+      # Best-effort 🔒 marker on a confirmed-private plugin's row (skip if gh absent/offline).
+      # Idempotent: once the row description starts with 🔒, re-syncs don't add another.
+      if _have_gh && ! _has_lock "$desc"; then
+        local prepo; prepo="$(_plugin_probe_repo "$root" "$name")"
+        [[ -n "$prepo" && "$(_repo_visibility "$prepo" 2>/dev/null || true)" == "private" ]] && desc="🔒 $desc"
+      fi
       if [[ -n "$url" ]]; then printf '| `%s` | %s | [%s](%s) |\n' "$name" "$desc" "$label" "$url"
       else printf '| `%s` | %s | %s |\n' "$name" "$desc" "$label"; fi
     done < <(_plugins "$root")
@@ -217,6 +223,15 @@ cmd_sync(){ # regenerate the README managed block, then re-validate
 _have_gh(){ command -v gh >/dev/null 2>&1; }                       # overridable in tests
 _repo_visibility(){ gh api "repos/$1" --jq '.visibility' 2>/dev/null; }  # prints public|private|internal or empty; overridable in tests
 
+# Private-label convention: an access-gated (private) plugin's marketplace description is prefixed
+# with this literal marker so users see it in the listing.
+LOCK_MARKER='🔒 Private (ZorCorp members only) — '
+_has_lock(){ case "$1" in '🔒'*) return 0;; *) return 1;; esac; }   # description starts with the 🔒 icon?
+# The repo (owner/name) to probe visibility for a plugin, whichever source kind.
+_plugin_probe_repo(){ # $1 root, $2 name
+  if _is_submodule "$1" "$2"; then _repo_label "$(_plugin_repo_url "$1" "$2")"; else _remote_repo "$1" "$2"; fi
+}
+
 check_visibility(){ # $1 root — a PRIVATE repo is an ERROR only for a SUBMODULE-managed plugin
   # (a private submodule breaks `/plugin marketplace add` — recursive clone 404s). A private REMOTE
   # source is FINE (it installs per-access at `/plugin install`) — noted, never an error.
@@ -247,6 +262,26 @@ check_visibility(){ # $1 root — a PRIVATE repo is an ERROR only for a SUBMODUL
   return $fail
 }
 
+# Reconcile the 🔒 private label vs a plugin's ACTUAL repo visibility. WARN only (descriptions are
+# curated — never auto-edited); orthogonal to source kind (applies by actual visibility). Graceful:
+# no gh / offline → skip. A private repo whose description isn't 🔒-labeled, or a public repo that
+# still carries a stale 🔒 label, is flagged.
+check_labels(){ # $1 root
+  local root="$1" name src repo vis desc warned=0
+  if ! _have_gh; then yellow "  · private-label reconciliation skipped (gh not installed)"; return 0; fi
+  while IFS=$'\t' read -r name src; do
+    repo="$(_plugin_probe_repo "$root" "$name")"; [[ -n "$repo" ]] || continue
+    vis="$(_repo_visibility "$repo" || true)"
+    desc="$(jq -r --arg n "$name" '.plugins[]|select(.name==$n)|.description // ""' "$root/.claude-plugin/marketplace.json")"
+    case "$vis" in
+      private) if ! _has_lock "$desc"; then yellow "  ⚠ $name: private but not labeled — prefix its description with '${LOCK_MARKER}'"; warned=1; fi;;
+      public)  if   _has_lock "$desc"; then yellow "  ⚠ $name: labeled private but its repo is public — drop the 🔒 marker"; warned=1; fi;;
+    esac
+  done < <(_plugins "$root")
+  [[ $warned -eq 0 ]] && green "  ✓ private labels match repo visibility"
+  return 0   # WARNINGS only — never fails check
+}
+
 cmd_check(){
   local root; root="$(resolve_root)" || { red "cannot locate zorskill root (set ZORSKILL_ROOT)"; exit 1; }
   local rc=0
@@ -255,6 +290,7 @@ cmd_check(){
   echo "▸ Both-format presence";                  check_both_format "$root" || rc=1
   echo "▸ README roster sync";                    check_readme      "$root" || rc=1
   echo "▸ Repo visibility (must be public)";      check_visibility  "$root" || rc=1
+  echo "▸ Private-label reconciliation";          check_labels      "$root"          # WARN-only
   echo "▸ Submodule health";                      check_submodules  "$root" || rc=1
   echo
   if [[ $rc -eq 0 ]]; then green "PASS — marketplace is consistent ($root)"; else red "FAIL — fix the ✗ items above"; fi

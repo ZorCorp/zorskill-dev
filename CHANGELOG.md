@@ -17,6 +17,11 @@ new capability → minor, fix/docs → patch.
   - `release` / `new`: refuse a remote-sourced plugin name with a clear message, BEFORE any git op,
     so no orphan `plugins/<name>` gitlink is created.
   - `drift`: never treats a remote-sourced entry as a missing submodule or tries to advance it.
+  - Private-label reconciliation. Convention: an access-gated plugin's marketplace `description` is
+    prefixed with `🔒 Private (ZorCorp members only) — `. `check` reconciles that label against actual
+    repo visibility (best-effort, needs gh): a private repo without the 🔒 label, or a public repo that
+    still carries a stale 🔒 label, is a WARNING (never auto-edited, never fails). `sync` shows a 🔒
+    marker on confirmed-private plugins' README rows (best-effort; skipped offline; idempotent).
 
 ## [0.7.3] - 2026-07-29
 - Private-repo guardrail. A private plugin repo breaks `/plugin marketplace add` for every end user
