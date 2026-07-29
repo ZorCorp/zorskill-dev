@@ -183,6 +183,30 @@ cmd_sync(){ # regenerate the README managed block, then re-validate
   echo "▸ Re-validate"; ( cd "$root" && cmd_check )
 }
 
+# Repo visibility guardrail. A PRIVATE plugin repo breaks `/plugin marketplace add` for EVERY end
+# user (Claude Code recursively clones every plugin submodule and 404s on any it can't reach).
+# Best-effort + network-dependent, so it degrades gracefully: no gh / API failure / offline → skip
+# with a note (never fails check on lack of network). Only a CONFIRMED `private` is an ERROR.
+_have_gh(){ command -v gh >/dev/null 2>&1; }                       # overridable in tests
+_repo_visibility(){ gh api "repos/$1" --jq '.visibility' 2>/dev/null; }  # prints public|private|internal or empty; overridable in tests
+
+check_visibility(){ # $1 root — private plugin repos = ERROR (best-effort; needs gh + network)
+  local root="$1" fail=0 name src url path vis
+  if ! _have_gh; then yellow "  · repo visibility not checked (gh not installed) — ensure every plugin repo is PUBLIC"; return 0; fi
+  while IFS=$'\t' read -r name src; do
+    url="$(_plugin_repo_url "$root" "$name")"; path="$(_repo_label "$url")"
+    vis="$(_repo_visibility "$path" || true)"
+    case "$vis" in
+      private) red "  ✗ $name: repo is PRIVATE — this breaks \`/plugin marketplace add\` for end users (recursive submodule clone 404s). Make it public or delist it."; fail=1;;
+      public)  : ;;
+      "")      yellow "  · $name: visibility unknown (gh api failed/offline) — skipped";;
+      *)       yellow "  · $name: visibility '$vis' (not public) — verify end users can clone it";;
+    esac
+  done < <(_plugins "$root")
+  [[ $fail -eq 0 ]] && green "  ✓ no confirmed-private plugin repos"
+  return $fail
+}
+
 cmd_check(){
   local root; root="$(resolve_root)" || { red "cannot locate zorskill root (set ZORSKILL_ROOT)"; exit 1; }
   local rc=0
@@ -190,6 +214,7 @@ cmd_check(){
   echo "▸ Version consistency (per-plugin)";      check_versions    "$root" || rc=1
   echo "▸ Both-format presence";                  check_both_format "$root" || rc=1
   echo "▸ README roster sync";                    check_readme      "$root" || rc=1
+  echo "▸ Repo visibility (must be public)";      check_visibility  "$root" || rc=1
   echo "▸ Submodule health";                      check_submodules  "$root" || rc=1
   echo
   if [[ $rc -eq 0 ]]; then green "PASS — marketplace is consistent ($root)"; else red "FAIL — fix the ✗ items above"; fi
@@ -442,13 +467,14 @@ render_template(){
 _script_dir(){ cd "$(dirname "${BASH_SOURCE[0]}")" && pwd; }
 
 cmd_new(){
-  local name="${1:-}" url="" desc="" create=0
-  [[ -n "$name" ]] || { red "usage: new <name> [--repo-url URL] [--create-remote] [--description TEXT]"; return 2; }
+  local name="${1:-}" url="" desc="" create=0 allow_private=0
+  [[ -n "$name" ]] || { red "usage: new <name> [--repo-url URL] [--create-remote] [--allow-private] [--description TEXT]"; return 2; }
   shift
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --repo-url) url="${2:-}"; shift;;
       --create-remote) create=1;;
+      --allow-private) allow_private=1;;
       --description) desc="${2:-}"; shift;;
       *) red "unknown flag: $1"; return 2;;
     esac; shift
@@ -463,6 +489,18 @@ cmd_new(){
     yellow "  --create-remote will run: gh repo create ZorCorp/$name --public"
     command -v gh >/dev/null 2>&1 || { red "gh not installed"; return 1; }
     gh repo create "ZorCorp/$name" --public || return 1
+  fi
+
+  # Guardrail: refuse a CONFIRMED-private repo (breaks `/plugin marketplace add` for end users),
+  # unless --allow-private. Best-effort: gh absent / API failure → proceed (don't block on network).
+  if [[ $allow_private -eq 0 && $create -eq 0 ]] && _have_gh; then
+    local vis; vis="$(_repo_visibility "$(_repo_label "$url")" || true)"
+    if [[ "$vis" == "private" ]]; then
+      red "✗ $name: $(_repo_label "$url") is PRIVATE — a private plugin repo breaks \`/plugin marketplace add\`"
+      red "  for every end user (Claude Code recursively clones each plugin submodule and 404s on it)."
+      red "  Make the repo public, or pass --allow-private to add it to a private marketplace anyway."
+      return 1
+    fi
   fi
 
   local sub="$root/plugins/$name"

@@ -2,7 +2,7 @@
 name: zorskill-dev
 description: "Maintainer tooling for the zorskill plugin marketplace. Use when releasing a plugin update (advance its submodule pointer + bump marketplace versions), auditing version drift across all plugins, detecting plugins released in their own repo but not yet carried into the marketplace, keeping the root README Skills table in sync, or scaffolding a new plugin. Commands: /zorskill-dev:check, /zorskill-dev:release, /zorskill-dev:new, /zorskill-dev:sync, /zorskill-dev:drift."
 metadata:
-  version: "0.7.2"
+  version: "0.7.3"
 ---
 
 # zorskill-dev
@@ -21,17 +21,20 @@ that stays each repo's own concern.
   format presence, README roster sync, and submodule health. Severity: a missing `.claude-plugin/plugin.json`
   is an ERROR (fails); a missing `SKILL.md` is a WARNING (some plugins are intentionally Claude-only).
   README roster drift (a marketplace plugin missing from the managed Skills table, or a delisted plugin
-  still listed) is an ERROR. `check` exits non-zero only on ERRORs.
+  still listed) is an ERROR. It also flags any plugin whose repo is **private** as an ERROR (a private
+  plugin repo breaks `/plugin marketplace add` for every end user — see below). `check` exits non-zero
+  only on ERRORs.
 - `/zorskill-dev:release <name> <x.y.z> [--push]` — advance `<name>`'s submodule pointer to its repo's
   latest, verify the plugin repo actually declares `<x.y.z>`, sync the marketplace versions, sync the
   README Skills table, validate, and commit. The validate step is SCOPED — it hard-fails only on repo-wide
   JSON validity and the target plugin's own consistency, so another plugin's pre-existing drift never
   blocks this release (it prints as a warning). Commit-only by default; `--push` pushes `main`.
-- `/zorskill-dev:new <name> [--create-remote]` — clone `ZorCorp/<name>` as a submodule and scaffold
-  four things into the plugin's own working tree: `plugin.json`, `SKILL.md`, the tag-driven
+- `/zorskill-dev:new <name> [--create-remote] [--allow-private]` — clone `ZorCorp/<name>` as a submodule
+  and scaffold four things into the plugin's own working tree: `plugin.json`, `SKILL.md`, the tag-driven
   `.github/workflows/release.yml`, and a managed **release rule in `CLAUDE.md`** (created if absent;
   appended non-destructively if a `CLAUDE.md` already exists without the block). Then register the
-  marketplace entry, sync the README Skills table, and stage.
+  marketplace entry, sync the README Skills table, and stage. **Refuses a confirmed-private repo** (which
+  would break end-user install — see below) unless `--allow-private` is passed for a private marketplace.
 - `/zorskill-dev:sync` — regenerate the managed Skills table in the root `README.md` from
   `marketplace.json` (add missing plugins, drop delisted ones), then re-validate. Use it to fix README
   drift without cutting a release.
@@ -48,6 +51,18 @@ that stays each repo's own concern.
   is skipped; the skipped plugin is carried in manually via `/zorskill-dev:release`. Commit-only by default;
   `--push` pushes `main`; `--dry-run` previews and changes nothing. Intended for a scheduled
   drift-detector Action.
+
+## Plugin repos must be PUBLIC
+
+Every plugin in the marketplace is a git submodule, and `/plugin marketplace add ZorCorp/zorskill`
+recursively clones **every** plugin repo on the end user's machine. A single **private** plugin repo
+makes that clone 404 and **aborts the whole install for every user**. So marketplace plugin repos must
+be public. Guardrails: `/zorskill-dev:check` flags any plugin whose repo is private as an ERROR, and
+`/zorskill-dev:new` refuses a private repo unless `--allow-private` is passed. Both probe visibility via
+`gh api repos/<owner>/<name> --jq .visibility` — best-effort: if `gh` is missing or the API is
+unreachable, the probe is skipped with a note (it never fails on lack of network); only a **confirmed**
+`private` is an error/refusal. A repo that must stay private is delisted and carried in manually via
+`/zorskill-dev:release` into a private marketplace, or added with `new --allow-private`.
 
 ## README Skills table (managed block)
 

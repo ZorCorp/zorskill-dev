@@ -3,6 +3,14 @@
 All notable changes to `zorskill-dev` are documented here. Versioning is semver;
 new capability → minor, fix/docs → patch.
 
+## [0.7.3] - 2026-07-29
+- Private-repo guardrail. A private plugin repo breaks `/plugin marketplace add` for every end user
+  (Claude Code recursively clones each plugin submodule and 404s on any it can't reach). `check` now
+  probes each plugin repo's visibility (`gh api repos/<owner>/<name> --jq .visibility`) and flags a
+  confirmed-private repo as an ERROR; `new` refuses a confirmed-private repo unless `--allow-private`
+  is passed. Best-effort + graceful: if `gh` is absent or the API is unreachable, the probe is skipped
+  with a note (never fails on lack of network) — only a confirmed `private` is an error/refusal.
+
 ## [0.7.2] - 2026-07-27
 - Scope `drift`'s validate gate (mirrors `check_release` for `release`, applied to the DRIFTED SET):
   hard-fails ONLY on repo-wide JSON validity, each drifted plugin's own consistency (plugin.json ==

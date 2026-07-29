@@ -11,7 +11,7 @@ git init --quiet "$root"; mkdir -p "$root/.claude-plugin"
 printf '{ "name":"zorskill","version":"1.0.0","plugins":[] }\n' > "$root/.claude-plugin/marketplace.json"
 git -C "$root" -c user.email=t@t -c user.name=t add -A && git -C "$root" -c user.email=t@t -c user.name=t commit --quiet -m init
 
-assert_pass bash -c 'source '"$HERE"'/../scripts/zorskill-dev.sh --lib;
+assert_pass bash -c 'source '"$HERE"'/../scripts/zorskill-dev.sh --lib; _have_gh(){ return 1; };
   ZORSKILL_ROOT="'"$root"'" GIT_ALLOW_PROTOCOL=file cmd_new newplug --repo-url "'"$bare"'" --description "a: b desc"'
 # submodule scaffolded locally
 assert_eq "$(jq -r .name "$root/plugins/newplug/.claude-plugin/plugin.json")" "newplug" "plugin.json scaffolded"
@@ -39,7 +39,7 @@ printf -- '---\nname: appendplug\ndescription: "x"\n---\n' > "$work2/SKILL.md"
 printf '# appendplug\n\nORIGINAL CLAUDE CONTENT keep me.\n' > "$work2/CLAUDE.md"
 git -C "$work2" add -A && git -C "$work2" -c user.email=t@t -c user.name=t commit --quiet -m init
 git -C "$work2" push --quiet origin HEAD:refs/heads/main
-assert_pass bash -c 'source '"$HERE"'/../scripts/zorskill-dev.sh --lib; ZORSKILL_ROOT="'"$root"'" cmd_new appendplug --repo-url "'"$bare2"'"'
+assert_pass bash -c 'source '"$HERE"'/../scripts/zorskill-dev.sh --lib; _have_gh(){ return 1; }; ZORSKILL_ROOT="'"$root"'" cmd_new appendplug --repo-url "'"$bare2"'"'
 assert_pass grep -qF "ORIGINAL CLAUDE CONTENT keep me." "$root/plugins/appendplug/CLAUDE.md"   # original preserved
 assert_eq "$(grep -cF '<!-- BEGIN zorskill-release' "$root/plugins/appendplug/CLAUDE.md")" "1" "append: block added exactly once"
 
@@ -52,8 +52,17 @@ printf -- '---\nname: managedplug\ndescription: "x"\n---\n' > "$work3/SKILL.md"
 { printf '# managedplug\n\nPRE-EXISTING content.\n\n'; cat "$TDIR/claude-release-block.md"; } > "$work3/CLAUDE.md"
 git -C "$work3" add -A && git -C "$work3" -c user.email=t@t -c user.name=t commit --quiet -m init
 git -C "$work3" push --quiet origin HEAD:refs/heads/main
-assert_pass bash -c 'source '"$HERE"'/../scripts/zorskill-dev.sh --lib; ZORSKILL_ROOT="'"$root"'" cmd_new managedplug --repo-url "'"$bare3"'"'
+assert_pass bash -c 'source '"$HERE"'/../scripts/zorskill-dev.sh --lib; _have_gh(){ return 1; }; ZORSKILL_ROOT="'"$root"'" cmd_new managedplug --repo-url "'"$bare3"'"'
 assert_eq "$(grep -cF '<!-- BEGIN zorskill-release' "$root/plugins/managedplug/CLAUDE.md")" "1" "already-managed: still exactly one block (no duplicate)"
 assert_pass grep -qF "PRE-EXISTING content." "$root/plugins/managedplug/CLAUDE.md"   # untouched
+
+# --- visibility guardrail: REFUSE a confirmed-private repo without --allow-private; PROCEED with it ---
+bare4="$FIX/privplug.git"; git init --quiet --bare "$bare4"; git -C "$bare4" symbolic-ref HEAD refs/heads/main
+# refuse: gh present + repo reports private, no --allow-private → non-zero, NOT registered
+assert_fail bash -c 'source '"$HERE"'/../scripts/zorskill-dev.sh --lib; _have_gh(){ return 0; }; _repo_visibility(){ echo private; }; ZORSKILL_ROOT="'"$root"'" cmd_new privplug --repo-url "'"$bare4"'"'
+assert_pass bash -c '! jq -e ".plugins[]|select(.name==\"privplug\")" "'"$root"'/.claude-plugin/marketplace.json" >/dev/null 2>&1'
+# proceed: same private repo WITH --allow-private → registered
+assert_pass bash -c 'source '"$HERE"'/../scripts/zorskill-dev.sh --lib; _have_gh(){ return 0; }; _repo_visibility(){ echo private; }; ZORSKILL_ROOT="'"$root"'" cmd_new privplug --repo-url "'"$bare4"'" --allow-private'
+assert_pass bash -c 'jq -e ".plugins[]|select(.name==\"privplug\")" "'"$root"'/.claude-plugin/marketplace.json" >/dev/null 2>&1'
 
 echo "  ($TESTS_RUN run, $TESTS_FAIL failed)"; rm -rf "$FIX"; [[ $TESTS_FAIL -eq 0 ]]
