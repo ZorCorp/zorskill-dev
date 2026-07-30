@@ -28,8 +28,10 @@ that stays each repo's own concern.
   latest, verify the plugin repo actually declares `<x.y.z>`, sync the marketplace versions, sync the
   README Skills table, validate, and commit. The validate step is SCOPED — it hard-fails only on repo-wide
   JSON validity and the target plugin's own consistency, so another plugin's pre-existing drift never
-  blocks this release (it prints as a warning). Manages SUBMODULE plugins only — refuses a
-  remote-sourced plugin (edit its marketplace version by hand). Commit-only by default; `--push` pushes `main`.
+  blocks this release (it prints as a warning). Works for BOTH source kinds: a SUBMODULE plugin advances
+  its on-disk pointer; a REMOTE (url/github) plugin is verified against its repo tip over the GitHub API
+  (`gh`) and carried into the marketplace entry with no submodule. Either way the tool only carries in a
+  version the plugin's own repo already declares — it never edits a plugin's repo. Commit-only by default; `--push` pushes `main`.
 - `/zorskill-dev:new <name> [--create-remote] [--allow-private]` — clone `ZorCorp/<name>` as a submodule
   and scaffold four things into the plugin's own working tree: `plugin.json`, `SKILL.md`, the tag-driven
   `.github/workflows/release.yml`, and a managed **release rule in `CLAUDE.md`** (created if absent;
@@ -40,18 +42,20 @@ that stays each repo's own concern.
   `marketplace.json` (add missing plugins, drop delisted ones), then re-validate. Use it to fix README
   drift without cutting a release.
 - `/zorskill-dev:drift [--dry-run] [--push]` — detect plugins whose OWN repo was released to a new
-  version that was never carried into the marketplace: for each plugin it fetches the repo, reads the
-  version at its tracked-branch tip, and if that tip is strictly AHEAD of the marketplace entry (numeric
-  semver compare — forward-only), advances the submodule pointer + marketplace entry, patch-bumps the
-  aggregate, syncs the README, and commits — HARD-GATED on a SCOPED check: repo-wide JSON validity, each
-  drifted plugin's own consistency (plugin.json == marketplace), and README roster sync. A structurally
-  broken drifted tip aborts and reverts, committing nothing. A tip BEHIND the marketplace (revert/
-  force-push) warns and is left unchanged — never downgraded. A submodule that is uninitialized or whose
-  remote can't be fetched (e.g. a private repo the runner has no token for) is skipped with a warning and
-  is NON-BLOCKING for the gate — so PUBLIC plugins still carry in even while a private/uninitialized one
-  is skipped; the skipped plugin is carried in manually via `/zorskill-dev:release`. Commit-only by default;
-  `--push` pushes `main`; `--dry-run` previews and changes nothing. Intended for a scheduled
-  drift-detector Action.
+  version that was never carried into the marketplace, across BOTH source kinds: a SUBMODULE plugin's
+  tracked-branch tip is read from the initialized submodule; a REMOTE (url/github) plugin's default-branch
+  tip is read over the GitHub API (`gh`, honouring `$GH_TOKEN` so private repos resolve with a read token).
+  If that tip is strictly AHEAD of the marketplace entry (numeric semver compare — forward-only), it
+  advances the marketplace entry (and, for a submodule, the pointer), patch-bumps the aggregate, syncs the
+  README, and commits — HARD-GATED on a SCOPED check: repo-wide JSON validity, each drifted plugin's own
+  consistency (submodule: plugin.json == marketplace; remote: marketplace holds a semver carried from the
+  tip), and README roster sync. A structurally broken drifted tip aborts and reverts, committing nothing. A
+  tip BEHIND the marketplace (revert/force-push) warns and is left unchanged — never downgraded. A submodule
+  that is uninitialized, or a remote repo that can't be reached (private without a token, non-github, or
+  offline), is skipped with a warning and is NON-BLOCKING for the gate — so reachable plugins still carry in
+  even while an unreachable one is skipped (carry it in later once reachable, or via `/zorskill-dev:release`).
+  Commit-only by default; `--push` pushes `main`; `--dry-run` previews and changes nothing. Intended for a
+  scheduled drift-detector Action.
 
 ## Mixed-source marketplaces (submodule vs remote)
 

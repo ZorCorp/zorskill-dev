@@ -3,6 +3,23 @@
 All notable changes to `zorskill-dev` are documented here. Versioning is semver;
 new capability → minor, fix/docs → patch.
 
+## [0.9.0] - 2026-07-30
+- `drift` and `release` now carry in REMOTE (url/github object-source) plugins, not just submodules.
+  A remote plugin's version is read from its default-branch `.claude-plugin/plugin.json` over the GitHub
+  API (`gh api …`, tolerant grep), so `bms2`/`gcp-bq` stay url-sourced yet auto-sync into the marketplace
+  exactly like submodule plugins — closing a blind spot where `drift` reported "no drift" while a
+  url-sourced plugin was several versions behind. New helper `_remote_tip_version` (the remote analogue of
+  `_repo_tip_version`); it honours `$GH_TOKEN`, so a PRIVATE repo (e.g. `gcp-bq`) resolves when a read
+  token is present and is skipped (non-blocking) otherwise. `release` no longer refuses a remote plugin:
+  it verifies the repo tip declares the requested version, then updates the marketplace entry with no
+  submodule pointer and no orphan `plugins/<name>` gitlink.
+- The scheduled drift-detector Action (`.github/workflows/plugin-drift.yml`) passes
+  `GH_TOKEN: ${{ secrets.SUBMODULE_READ_TOKEN || github.token }}` to the drift step so it can read remote
+  plugin repos — private via the read token, public via the built-in token.
+- The `check_drift_gate`/`check_release`/`_drift_revert` paths handle a drifted plugin that has no local
+  `plugins/<name>` on disk (remote-sourced): they validate the marketplace semver and never `git add` a
+  path that doesn't exist.
+
 ## [0.8.1] - 2026-07-29
 - `check` warns (never fails) on the SSH-clone footgun: a remote entry with `"source":"github"` makes
   Claude Code clone over SSH (`git@github.com:…`), which fails at `/plugin install` for users without

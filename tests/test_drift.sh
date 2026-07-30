@@ -128,4 +128,38 @@ assert_pass bash -c 'git -C "'"$root"'" log -1 --pretty=%s | grep -q "chore(drif
 assert_eq "$(jq -r '.plugins[]|select(.name=="ghost")|.version' "$root/.claude-plugin/marketplace.json")" "0.1.0" "scoped gate: uninitialized ghost untouched"
 rm -rf "$FIX"
 
+# add_remote <root> <name> <ver> — register a url-sourced plugin (object source, NOT a submodule)
+add_remote(){
+  local root="$1" nm="$2" ver="$3" tmp; tmp=$(mktemp)
+  jq --arg n "$nm" --arg v "$ver" '.plugins += [{"name":$n,"version":$v,"source":{"source":"url","url":("https://github.com/ZorCorp/"+$n+".git")},"description":("R "+$n+". x."),"category":"productivity"}]' "$root/.claude-plugin/marketplace.json" > "$tmp" && mv "$tmp" "$root/.claude-plugin/marketplace.json"
+}
+
+# === 8. REMOTE (url-source) drift: repo tip ahead of marketplace → carry in, no submodule touched ===
+# _remote_tip_version is stubbed (the ONLY gh seam) so the suite stays offline; _have_gh stays 1.
+build_fixture; add_remote "$root" rem 0.1.0
+git -C "$root" -c user.email=t@t -c user.name=t commit -aqm "register remote rem"
+assert_pass bash -c 'source '"$HERE"'/../scripts/zorskill-dev.sh --lib; _have_gh(){ return 1; }; _remote_tip_version(){ [ "$2" = rem ] && echo 0.2.0; }; ZORSKILL_ROOT="'"$root"'" cmd_drift'
+assert_eq "$(jq -r '.plugins[]|select(.name=="rem")|.version' "$root/.claude-plugin/marketplace.json")" "0.2.0" "remote drift: marketplace entry advanced"
+assert_eq "$(jq -r '.plugins[]|select(.name=="demo")|.version' "$root/.claude-plugin/marketplace.json")" "0.1.0" "remote drift: submodule demo untouched"
+assert_pass bash -c '[ ! -e "'"$root"'/plugins/rem" ]'   # NO orphan submodule dir
+assert_pass bash -c 'git -C "'"$root"'" log -1 --pretty=%s | grep -q "chore(drift): advance rem"'
+rm -rf "$FIX"
+
+# === 9. REMOTE BEHIND (repo tip older than marketplace) → WARN, no downgrade, no commit, exit 0 ===
+build_fixture; add_remote "$root" rem 0.3.0
+git -C "$root" -c user.email=t@t -c user.name=t commit -aqm "register remote rem ahead"
+head0="$(git -C "$root" rev-parse HEAD)"
+assert_pass bash -c 'source '"$HERE"'/../scripts/zorskill-dev.sh --lib; _have_gh(){ return 1; }; _remote_tip_version(){ [ "$2" = rem ] && echo 0.2.0; }; out="$(ZORSKILL_ROOT="'"$root"'" cmd_drift 2>&1)"; grep -q "BEHIND" <<<"$out"'
+assert_eq "$(jq -r '.plugins[]|select(.name=="rem")|.version' "$root/.claude-plugin/marketplace.json")" "0.3.0" "remote behind: not downgraded"
+assert_eq "$(git -C "$root" rev-parse HEAD)" "$head0" "remote behind: no commit"
+rm -rf "$FIX"
+
+# === 10. REMOTE unreachable (tip empty: private w/o token / offline) → skipped, exit 0, no commit ===
+build_fixture; add_remote "$root" rem 0.1.0
+git -C "$root" -c user.email=t@t -c user.name=t commit -aqm "register remote rem"
+head0="$(git -C "$root" rev-parse HEAD)"
+assert_pass bash -c 'source '"$HERE"'/../scripts/zorskill-dev.sh --lib; _have_gh(){ return 1; }; _remote_tip_version(){ return 0; }; out="$(ZORSKILL_ROOT="'"$root"'" cmd_drift 2>&1)"; grep -q "rem: remote repo ZorCorp/rem unreachable" <<<"$out"'
+assert_eq "$(git -C "$root" rev-parse HEAD)" "$head0" "remote unreachable: no commit"
+rm -rf "$FIX"
+
 echo "  ($TESTS_RUN run, $TESTS_FAIL failed)"; [[ $TESTS_FAIL -eq 0 ]]

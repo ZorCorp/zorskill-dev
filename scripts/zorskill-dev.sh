@@ -358,18 +358,28 @@ check_release(){
   if check_json "$root" >/dev/null 2>&1; then green "  ✓ JSON valid (repo-wide)"
   else red "  ✗ repo has invalid JSON — fix before releasing:"; check_json "$root"; rc=1; fi
   echo "  • target plugin: $name"
-  p="$root/plugins/$name/.claude-plugin/plugin.json"
-  if [[ ! -f "$p" ]]; then
-    red "  ✗ $name: missing .claude-plugin/plugin.json"; rc=1
-  else
-    pjver="$(jq -r '.version // ""' "$p")"
-    rootver="$(jq -r --arg n "$name" '.plugins[]|select(.name==$n)|.version' "$root/.claude-plugin/marketplace.json")"
-    if [[ "$pjver" == "$ver" && "$rootver" == "$ver" ]] && is_semver "$ver"; then
-      green "  ✓ $name @ $ver (plugin.json == marketplace == requested)"
+  rootver="$(jq -r --arg n "$name" '.plugins[]|select(.name==$n)|.version' "$root/.claude-plugin/marketplace.json")"
+  if ! _is_submodule "$root" "$name"; then
+    # Remote-sourced: no local plugin.json here. The remote-tip == requested match was already
+    # enforced in cmd_release; here we confirm the marketplace entry now holds the requested version.
+    if [[ "$rootver" == "$ver" ]] && is_semver "$ver"; then
+      green "  ✓ $name @ $ver (remote-sourced — marketplace == requested)"
     else
-      red "  ✗ $name version mismatch — plugin.json='$pjver' marketplace='$rootver' requested='$ver'"; rc=1
+      red "  ✗ $name version mismatch — marketplace='$rootver' requested='$ver'"; rc=1
     fi
-    [[ -f "$root/plugins/$name/SKILL.md" ]] || yellow "  ⚠ $name: no SKILL.md (Claude-only plugin) — not blocking"
+  else
+    p="$root/plugins/$name/.claude-plugin/plugin.json"
+    if [[ ! -f "$p" ]]; then
+      red "  ✗ $name: missing .claude-plugin/plugin.json"; rc=1
+    else
+      pjver="$(jq -r '.version // ""' "$p")"
+      if [[ "$pjver" == "$ver" && "$rootver" == "$ver" ]] && is_semver "$ver"; then
+        green "  ✓ $name @ $ver (plugin.json == marketplace == requested)"
+      else
+        red "  ✗ $name version mismatch — plugin.json='$pjver' marketplace='$rootver' requested='$ver'"; rc=1
+      fi
+      [[ -f "$root/plugins/$name/SKILL.md" ]] || yellow "  ⚠ $name: no SKILL.md (Claude-only plugin) — not blocking"
+    fi
   fi
   # Other plugins: report pre-existing non-uniformity/drift as WARNINGS only — never gate.
   while IFS=$'\t' read -r n s; do
@@ -397,30 +407,50 @@ cmd_release(){
   local root; root="$(resolve_root)" || { red "cannot locate zorskill root (set ZORSKILL_ROOT)"; return 1; }
   jq -e --arg n "$name" '.plugins[]|select(.name==$n)' "$root/.claude-plugin/marketplace.json" >/dev/null 2>&1 \
     || { red "not a registered plugin: $name"; return 1; }
-  # Refuse a remote-sourced plugin BEFORE any git submodule op (prevents an orphan plugins/<name> gitlink).
-  if ! _is_submodule "$root" "$name"; then
-    red "✗ $name is remote-sourced ($(_remote_source_desc "$root" "$name")), not a submodule — release manages submodules only."
-    red "  Edit its marketplace version by hand, or convert it to a submodule. (No submodule was created.)"
-    return 1
+  # Two carry-in paths. SUBMODULE-managed: advance the on-disk pointer and read its local
+  # plugin.json. REMOTE-sourced (url/github object source, no submodule): verify the repo's tip
+  # over the GitHub API and carry that version into the marketplace entry — no local files, no
+  # orphan gitlink. Either way the tool NEVER edits a plugin's own repo; it only carries in a
+  # version the repo already declares.
+  local extra_add="" declared
+  if _is_submodule "$root" "$name"; then
+    echo "▸ advance submodule pointer"; advance_pointer "$root" "$name" || return 1
+    declared="$(read_plugin_version "$root" "$name")"
+    echo "▸ verify plugin repo declares $ver"
+    if [[ "$declared" != "$ver" ]]; then
+      red "  ✗ plugins/$name declares '$declared', you asked for '$ver'."
+      red "    Bump + push $name's own repo to $ver first, then re-run. (This tool never edits a plugin's repo.)"
+      return 1
+    fi
+    extra_add="plugins/$name"
+  else
+    local rrepo; rrepo="$(_remote_repo "$root" "$name")"
+    if [[ -z "$rrepo" ]]; then
+      red "✗ $name is remote-sourced ($(_remote_source_desc "$root" "$name")) but not a GitHub repo — cannot verify its version remotely."
+      red "  Set its marketplace version by hand, or host the plugin on GitHub."
+      return 1
+    fi
+    echo "▸ verify remote repo $rrepo declares $ver"
+    declared="$(_remote_tip_version "$root" "$name")"
+    if [[ -z "$declared" ]]; then
+      red "  ✗ cannot read $rrepo's .claude-plugin/plugin.json (no gh, unreachable, or private without a read token)."
+      return 1
+    fi
+    if [[ "$declared" != "$ver" ]]; then
+      red "  ✗ $rrepo declares '$declared', you asked for '$ver'."
+      red "    Bump + push $name's own repo to $ver first, then re-run. (This tool never edits a plugin's repo.)"
+      return 1
+    fi
   fi
-
-  echo "▸ 1/5 advance submodule pointer"; advance_pointer "$root" "$name" || return 1
-  local declared; declared="$(read_plugin_version "$root" "$name")"
-  echo "▸ 2/5 verify plugin repo declares $ver"
-  if [[ "$declared" != "$ver" ]]; then
-    red "  ✗ plugins/$name declares '$declared', you asked for '$ver'."
-    red "    Bump + push $name's own repo to $ver first, then re-run. (This tool never edits a plugin's repo.)"
-    return 1
-  fi
-  echo "▸ 3/5 sync marketplace versions"; a="$(apply_release_versions "$root" "$name" "$ver" "$agg_override")" || return 1
+  echo "▸ sync marketplace versions"; a="$(apply_release_versions "$root" "$name" "$ver" "$agg_override")" || return 1
   local sync_readme_done=0
   if [[ -f "$root/README.md" ]] && _readme_has_markers "$root/README.md"; then
-    echo "▸ 3b/5 sync README roster"; sync_readme "$root" && sync_readme_done=1
+    echo "▸ sync README roster"; sync_readme "$root" && sync_readme_done=1
   fi
-  echo "▸ 4/5 validate (scoped to $name + repo-wide JSON; other plugins' drift is non-blocking)"
+  echo "▸ validate (scoped to $name + repo-wide JSON; other plugins' drift is non-blocking)"
   check_release "$root" "$name" "$ver" || { red "check failed for target/JSON — aborting (files bumped; revert or fix)"; return 1; }
-  echo "▸ 5/5 commit"
-  git -C "$root" add "plugins/$name" ".claude-plugin/marketplace.json"
+  echo "▸ commit"
+  git -C "$root" add $extra_add ".claude-plugin/marketplace.json"
   [[ $sync_readme_done -eq 1 ]] && git -C "$root" add README.md
   git -C "$root" commit -q -m "zorskill: $name v$ver (marketplace $a)" || yellow "  (nothing to commit?)"
   if [[ $push -eq 1 ]]; then
@@ -440,6 +470,22 @@ _repo_tip_version(){ # $1 root, $2 name, $3 branch
     | grep -oE '[0-9]+\.[0-9]+\.[0-9]+'
 }
 
+# Version at a REMOTE (url/github-sourced) plugin repo's default-branch tip, read via the
+# GitHub API — the remote analogue of _repo_tip_version, for plugins that have no submodule
+# on disk. Tolerant grep (not jq) so a partly-malformed manifest still yields a version; the
+# check gate then catches structural breakage. Honours gh's stored auth / $GH_TOKEN, so a
+# PRIVATE ZorCorp repo (e.g. gcp-bq) resolves when a read token is present. Empty on any
+# failure: no gh, a non-github source, an unreachable/private-without-token repo, or no manifest.
+# Overridable in tests (like _have_gh) to keep the suite offline.
+_remote_tip_version(){ # $1 root, $2 name
+  _have_gh || return 0
+  local repo; repo="$(_remote_repo "$1" "$2")"
+  [[ -n "$repo" ]] || return 0
+  gh api "repos/$repo/contents/.claude-plugin/plugin.json" -H "Accept: application/vnd.github.raw" 2>/dev/null \
+    | grep -oE '"version"[[:space:]]*:[[:space:]]*"[0-9]+\.[0-9]+\.[0-9]+"' | head -1 \
+    | grep -oE '[0-9]+\.[0-9]+\.[0-9]+'
+}
+
 # Revert ONLY what drift touched (not `.`), so an abort never disturbs unrelated
 # working-tree state (e.g. a locally-dirty sibling plugin).
 # Scoped drift gate — like check_release, but over the DRIFTED SET. Hard-fails ONLY on:
@@ -454,8 +500,15 @@ check_drift_gate(){ # $1 root, $2 space-separated drifted names
   else red "  ✗ repo has invalid JSON — fix before committing:"; check_json "$root"; rc=1; fi
   echo "  • drifted plugin(s):$drifted"
   for nm in $drifted; do
-    pj="$root/plugins/$nm/.claude-plugin/plugin.json"
     rootver="$(jq -r --arg n "$nm" '.plugins[]|select(.name==$n)|.version' "$root/.claude-plugin/marketplace.json")"
+    # Remote-sourced drifted plugins have no local plugin.json — the version was carried straight
+    # from the remote tip we read, so validate only that the marketplace now holds a semver.
+    if ! _is_submodule "$root" "$nm"; then
+      if is_semver "$rootver"; then green "  ✓ $nm @ $rootver (remote-sourced — carried from repo tip)"
+      else red "  ✗ $nm: marketplace version '$rootver' is not semver"; rc=1; fi
+      continue
+    fi
+    pj="$root/plugins/$nm/.claude-plugin/plugin.json"
     if [[ ! -f "$pj" ]]; then red "  ✗ $nm: missing .claude-plugin/plugin.json"; rc=1; continue; fi
     pjver="$(jq -r '.version // ""' "$pj")"
     if [[ "$pjver" == "$rootver" ]] && is_semver "$rootver"; then green "  ✓ $nm @ $rootver (plugin.json == marketplace)"
@@ -477,6 +530,8 @@ _drift_revert(){ # $1 root, $2 space-separated drifted names
   git -C "$root" checkout -- .claude-plugin/marketplace.json 2>/dev/null || true
   [[ -f "$root/README.md" ]] && git -C "$root" checkout -- README.md 2>/dev/null || true
   for nm in $2; do
+    # Only submodule plugins have an on-disk plugins/<name> to restore; remote ones don't.
+    _is_submodule "$root" "$nm" || continue
     git -C "$root" checkout -- "plugins/$nm" 2>/dev/null || true
     git -C "$root" -c protocol.file.allow=always submodule update --checkout "plugins/$nm" 2>/dev/null || true
   done
@@ -498,8 +553,30 @@ cmd_drift(){
   [[ $dryrun -eq 1 ]] && dr="(dry-run) "
   echo "▸ scanning ${dr}plugin repos for released-but-uncarried versions"
   while IFS=$'\t' read -r name src; do
-    # Remote-sourced entries have no submodule to advance — never treat them as "missing submodule".
-    if ! _is_submodule "$root" "$name"; then echo "  · $name: remote-sourced ($(_remote_source_desc "$root" "$name")) — not submodule-managed, skipped"; continue; fi
+    # Remote-sourced entries (url/github object source) have no submodule to advance. Instead of
+    # skipping, probe the repo's default-branch tip version over the GitHub API and carry any drift
+    # into the marketplace entry directly (no local checkout). Non-github or unreachable → skipped.
+    if ! _is_submodule "$root" "$name"; then
+      local rrepo rtip
+      rrepo="$(_remote_repo "$root" "$name")"
+      if [[ -z "$rrepo" ]]; then echo "  · $name: remote-sourced ($(_remote_source_desc "$root" "$name")) — non-github, cannot probe version, skipped"; continue; fi
+      rtip="$(_remote_tip_version "$root" "$name")"
+      curver="$(jq -r --arg n "$name" '.plugins[]|select(.name==$n)|.version' "$root/.claude-plugin/marketplace.json")"
+      if [[ -z "$rtip" ]]; then yellow "  ⚠ $name: remote repo $rrepo unreachable (private without token / no manifest / offline) — skipped"; continue; fi
+      if is_semver "$rtip" && is_semver "$curver" && _semver_gt "$curver" "$rtip"; then
+        yellow "  ⚠ $name: remote tip $rtip is BEHIND marketplace $curver — possible revert/force-push; left unchanged, review manually"
+      elif is_semver "$rtip" && _semver_gt "$rtip" "$curver"; then
+        echo "  • $name: marketplace=$curver  remote-tip=$rtip  → DRIFT (remote)"
+        drifted="$drifted $name"; n=$((n+1))
+        if [[ $dryrun -eq 0 ]]; then
+          local rtmp; rtmp="$(mktemp)"
+          jq --arg n "$name" --arg v "$rtip" '(.plugins[]|select(.name==$n)|.version)=$v' "$root/.claude-plugin/marketplace.json" > "$rtmp" && mv "$rtmp" "$root/.claude-plugin/marketplace.json"
+        fi
+      else
+        echo "  • $name: marketplace=$curver  remote-tip=${rtip:-<unreadable>}  ok"
+      fi
+      continue
+    fi
     sub="$root/plugins/$name"
     # Skip any submodule that isn't a usable git checkout here (uninitialized) OR whose remote
     # can't be fetched (private without a token / offline). General — no per-plugin special-casing.
@@ -547,7 +624,9 @@ cmd_drift(){
     return 1
   fi
   echo "▸ commit"
-  for name in $drifted; do git -C "$root" add "plugins/$name"; done
+  # Submodule drifted plugins stage their advanced pointer; remote-sourced ones changed only the
+  # marketplace entry (no plugins/<name> on disk) — never `git add` a path that doesn't exist.
+  for name in $drifted; do _is_submodule "$root" "$name" && git -C "$root" add "plugins/$name"; done
   git -C "$root" add ".claude-plugin/marketplace.json"
   [[ -f "$root/README.md" ]] && _readme_has_markers "$root/README.md" && git -C "$root" add README.md
   git -C "$root" commit -q -m "chore(drift): advance $names to their released versions (marketplace $agg)"
