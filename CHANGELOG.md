@@ -3,6 +3,24 @@
 All notable changes to `zorskill-dev` are documented here. Versioning is semver;
 new capability → minor, fix/docs → patch.
 
+## [0.10.0] - 2026-08-12
+- **Ref-pinned remote sources** — first-class support for the zorskill marketplace's new arrangement
+  where every plugin entry is `{"source":"url","url":"https://github.com/ZorCorp/<name>.git","ref":"v<version>"}`
+  (chosen because org sync and `/plugin marketplace add` don't init submodules, and the url form clones
+  over HTTPS). Invariant enforced everywhere: `source.ref == "v" + version`.
+  - `check`: new `check_refs` step — ERROR on a ref that contradicts the listed version, ERROR on a
+    confirmed-missing tag (best-effort `gh` probe; offline is a note, never a failure).
+  - `release`: a ref-pinned entry is gated on the TAG, not the branch tip — tag `v<x.y.z>` must exist
+    and its `plugin.json` must declare `<x.y.z>` (`_remote_tag_exists`, `_remote_ref_version`); the
+    entry's `version` and `source.ref` then advance together (`apply_release_versions` grew a ref arg).
+    An on-disk submodule checkout, when present, is advanced to the released tag (best-effort).
+  - `drift`: a ref-pinned remote tip carries in only when its `v<tip>` tag exists — released-but-untagged
+    tips are skipped with a warning; `version`+`ref` advance together; `check_drift_gate` fails a ref
+    that didn't advance with the version.
+- **New `mirror` command** (`/zorskill-dev:mirror [owner/repo]`, default `$ZORSKILL_MIRROR_REPO`) —
+  copies the manifest into the PRIVATE org-sync companion repo (claude.ai "Sync from GitHub" requires a
+  private repo) via the GitHub Contents API; no clone, no-op when identical.
+
 ## [0.9.0] - 2026-07-30
 - `drift` and `release` now carry in REMOTE (url/github object-source) plugins, not just submodules.
   A remote plugin's version is read from its default-branch `.claude-plugin/plugin.json` over the GitHub

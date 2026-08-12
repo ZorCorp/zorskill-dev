@@ -60,6 +60,25 @@ _remote_source_desc(){ jq -r --arg n "$2" '.plugins[]|select(.name==$n)|.source 
 # owner/name for a remote GITHUB source (to probe visibility), empty otherwise.
 # owner/name to probe visibility — from source.repo (github form) OR parsed from a github source.url.
 _remote_repo(){ jq -r --arg n "$2" '.plugins[]|select(.name==$n)|.source | if type=="object" then (if .repo then .repo elif ((.url // "") | test("^https?://github\\.com/")) then (.url | sub("^https?://github\\.com/";"") | sub("\\.git$";"")) else "" end) else "" end' "$1/.claude-plugin/marketplace.json"; }
+# .source.ref pinned by a remote-sourced entry ("" when absent or string source). A ref-PINNED
+# entry installs the tag, not the branch tip — so version and ref must move together.
+_source_ref(){ jq -r --arg n "$2" '.plugins[]|select(.name==$n)|.source | if type=="object" then (.ref // "") else "" end' "$1/.claude-plugin/marketplace.json"; }
+# Does tag $2 exist on repo $1 (owner/name)? 0 yes, 1 confirmed missing, 2 unknown (no gh/offline).
+# Overridable in tests.
+_remote_tag_exists(){
+  _have_gh || return 2
+  local out
+  if out="$(gh api "repos/$1/git/ref/tags/$2" --jq .ref 2>&1)"; then return 0; fi
+  case "$out" in *"Not Found"*) return 1;; *) return 2;; esac
+}
+# Version declared by .claude-plugin/plugin.json AT ref $2 of repo $1 (empty on any failure).
+# Tolerant grep like _remote_tip_version; overridable in tests.
+_remote_ref_version(){
+  _have_gh || return 0
+  gh api "repos/$1/contents/.claude-plugin/plugin.json?ref=$2" -H "Accept: application/vnd.github.raw" 2>/dev/null \
+    | grep -oE '"version"[[:space:]]*:[[:space:]]*"[0-9]+\.[0-9]+\.[0-9]+"' | head -1 \
+    | grep -oE '[0-9]+\.[0-9]+\.[0-9]+'
+}
 
 check_json(){
   local root="$1" fail=0 f name src   # name/src MUST be local: check_json runs inside
@@ -90,6 +109,32 @@ check_versions(){
     if [[ "$root_ver" == "$pj_ver" ]] && is_semver "$root_ver"; then green "  ✓ $name @ $root_ver"
     else red "  ✗ $name VERSION DRIFT — root marketplace='$root_ver' vs plugin.json='$pj_ver'"; fail=1; fi
   done < <(_plugins "$root")
+  return $fail
+}
+
+# Ref-pin consistency. An entry that pins a .source.ref must pin the release tag of the version it
+# lists: ref == "v<version>" — otherwise the manifest contradicts itself (version says X, users
+# install Y). Local mismatch = ERROR. Tag existence is probed best-effort via gh: a CONFIRMED-missing
+# tag = ERROR (users can't install); unreachable/offline = note only.
+check_refs(){
+  local root="$1" fail=0 name src ref ver repo
+  while IFS=$'\t' read -r name src; do
+    ref="$(_source_ref "$root" "$name")"
+    [[ -n "$ref" ]] || continue
+    ver="$(jq -r --arg n "$name" '.plugins[]|select(.name==$n)|.version' "$root/.claude-plugin/marketplace.json")"
+    if [[ "$ref" != "v$ver" ]]; then
+      red "  ✗ $name: source.ref '$ref' does not pin the listed version $ver (expected 'v$ver')"; fail=1; continue
+    fi
+    repo="$(_remote_repo "$root" "$name")"
+    if [[ -z "$repo" ]]; then echo "  · $name: ref $ref (non-github source — tag not probed)"; continue; fi
+    _remote_tag_exists "$repo" "$ref"
+    case $? in
+      0) : ;;
+      1) red "  ✗ $name: tag $ref does not exist on $repo — push the tag or fix the ref"; fail=1;;
+      *) echo "  · $name: ref $ref (tag existence not verified — no gh/offline)";;
+    esac
+  done < <(_plugins "$root")
+  [[ $fail -eq 0 ]] && green "  ✓ pinned refs match listed versions (tags probed best-effort)"
   return $fail
 }
 
@@ -305,6 +350,7 @@ cmd_check(){
   local rc=0
   echo "▸ JSON validity";                        check_json        "$root" || rc=1
   echo "▸ Version consistency (per-plugin)";      check_versions    "$root" || rc=1
+  echo "▸ Ref pinning (version == source.ref)";   check_refs        "$root" || rc=1
   echo "▸ Both-format presence";                  check_both_format "$root" || rc=1
   echo "▸ README roster sync";                    check_readme      "$root" || rc=1
   echo "▸ Repo visibility (must be public)";      check_visibility  "$root" || rc=1
@@ -337,14 +383,18 @@ read_plugin_version(){ jq -r '.version // ""' "$1/plugins/$2/.claude-plugin/plug
 _bump_patch(){ local v="$1"; IFS=. read -r a b c <<<"$v"; echo "$a.$b.$((c+1))"; }
 
 apply_release_versions(){
-  local root="$1" name="$2" ver="$3" agg="${4:-}" cur tmp mf="$1/.claude-plugin/marketplace.json"
+  # $5 (optional): new .source.ref to pin alongside the version (ref-pinned remote entries move
+  # version and ref together — never one without the other).
+  local root="$1" name="$2" ver="$3" agg="${4:-}" newref="${5:-}" cur tmp mf="$1/.claude-plugin/marketplace.json"
   is_semver "$ver" || { red "version must be x.y.z: $ver" >&2; return 2; }
   cur="$(jq -r '.version' "$mf")"
   if [[ -z "$agg" ]]; then agg="$(_bump_patch "$cur")"; fi
   is_semver "$agg" || { red "aggregate must be x.y.z: $agg" >&2; return 2; }
   tmp=$(mktemp)
-  jq --arg n "$name" --arg v "$ver" --arg a "$agg" \
-     '.version=$a | (.plugins[]|select(.name==$n)|.version)=$v' "$mf" > "$tmp" && mv "$tmp" "$mf"
+  jq --arg n "$name" --arg v "$ver" --arg a "$agg" --arg r "$newref" \
+     '.version=$a | (.plugins[]|select(.name==$n)|.version)=$v
+      | if $r != "" then (.plugins[]|select(.name==$n)|.source.ref)=$r else . end' \
+     "$mf" > "$tmp" && mv "$tmp" "$mf"
   echo "$agg"
 }
 
@@ -366,6 +416,10 @@ check_release(){
       green "  ✓ $name @ $ver (remote-sourced — marketplace == requested)"
     else
       red "  ✗ $name version mismatch — marketplace='$rootver' requested='$ver'"; rc=1
+    fi
+    local eref; eref="$(_source_ref "$root" "$name")"
+    if [[ -n "$eref" && "$eref" != "v$ver" ]]; then
+      red "  ✗ $name: source.ref '$eref' did not advance with the version (expected 'v$ver')"; rc=1
     fi
   else
     p="$root/plugins/$name/.claude-plugin/plugin.json"
@@ -412,7 +466,7 @@ cmd_release(){
   # over the GitHub API and carry that version into the marketplace entry — no local files, no
   # orphan gitlink. Either way the tool NEVER edits a plugin's own repo; it only carries in a
   # version the repo already declares.
-  local extra_add="" declared
+  local extra_add="" declared newref=""
   if _is_submodule "$root" "$name"; then
     echo "▸ advance submodule pointer"; advance_pointer "$root" "$name" || return 1
     declared="$(read_plugin_version "$root" "$name")"
@@ -430,19 +484,48 @@ cmd_release(){
       red "  Set its marketplace version by hand, or host the plugin on GitHub."
       return 1
     fi
-    echo "▸ verify remote repo $rrepo declares $ver"
-    declared="$(_remote_tip_version "$root" "$name")"
-    if [[ -z "$declared" ]]; then
-      red "  ✗ cannot read $rrepo's .claude-plugin/plugin.json (no gh, unreachable, or private without a read token)."
-      return 1
-    fi
-    if [[ "$declared" != "$ver" ]]; then
-      red "  ✗ $rrepo declares '$declared', you asked for '$ver'."
-      red "    Bump + push $name's own repo to $ver first, then re-run. (This tool never edits a plugin's repo.)"
-      return 1
+    if [[ -n "$(_source_ref "$root" "$name")" ]]; then
+      # Ref-PINNED remote entry: users install the tag, so the release gate is the TAG, not the
+      # branch tip — tag v<ver> must exist and its plugin.json must declare <ver>. The entry's
+      # version and ref then advance together.
+      newref="v$ver"
+      echo "▸ verify tag $newref on $rrepo declares $ver"
+      _remote_tag_exists "$rrepo" "$newref"
+      case $? in
+        1) red "  ✗ $rrepo has no tag $newref. Tag the release in the plugin's own repo first (its Release workflow does: gh workflow run release.yml -f version=$ver), then re-run."; return 1;;
+        2) red "  ✗ cannot reach $rrepo (no gh / offline) — a ref-pinned release needs the GitHub API."; return 1;;
+      esac
+      declared="$(_remote_ref_version "$rrepo" "$newref")"
+      if [[ "$declared" != "$ver" ]]; then
+        red "  ✗ $rrepo@$newref declares '${declared:-<unreadable>}', you asked for '$ver' — the tag doesn't match its own manifest."
+        return 1
+      fi
+      # Maintainer scaffolding: if a submodule checkout for this plugin still exists on disk,
+      # advance it to the released tag so the working tree matches what users install.
+      # Best-effort — a stale/absent checkout never blocks a release.
+      if [[ -e "$root/plugins/$name/.git" ]]; then
+        if git -C "$root/plugins/$name" -c protocol.file.allow=always fetch --quiet --tags origin 2>/dev/null \
+           && git -C "$root/plugins/$name" checkout --quiet "$newref" 2>/dev/null; then
+          extra_add="plugins/$name"
+        else
+          yellow "  ⚠ could not advance on-disk checkout plugins/$name to $newref (non-blocking)"
+        fi
+      fi
+    else
+      echo "▸ verify remote repo $rrepo declares $ver"
+      declared="$(_remote_tip_version "$root" "$name")"
+      if [[ -z "$declared" ]]; then
+        red "  ✗ cannot read $rrepo's .claude-plugin/plugin.json (no gh, unreachable, or private without a read token)."
+        return 1
+      fi
+      if [[ "$declared" != "$ver" ]]; then
+        red "  ✗ $rrepo declares '$declared', you asked for '$ver'."
+        red "    Bump + push $name's own repo to $ver first, then re-run. (This tool never edits a plugin's repo.)"
+        return 1
+      fi
     fi
   fi
-  echo "▸ sync marketplace versions"; a="$(apply_release_versions "$root" "$name" "$ver" "$agg_override")" || return 1
+  echo "▸ sync marketplace versions"; a="$(apply_release_versions "$root" "$name" "$ver" "$agg_override" "$newref")" || return 1
   local sync_readme_done=0
   if [[ -f "$root/README.md" ]] && _readme_has_markers "$root/README.md"; then
     echo "▸ sync README roster"; sync_readme "$root" && sync_readme_done=1
@@ -506,6 +589,10 @@ check_drift_gate(){ # $1 root, $2 space-separated drifted names
     if ! _is_submodule "$root" "$nm"; then
       if is_semver "$rootver"; then green "  ✓ $nm @ $rootver (remote-sourced — carried from repo tip)"
       else red "  ✗ $nm: marketplace version '$rootver' is not semver"; rc=1; fi
+      local gref; gref="$(_source_ref "$root" "$nm")"
+      if [[ -n "$gref" && "$gref" != "v$rootver" ]]; then
+        red "  ✗ $nm: source.ref '$gref' did not advance with the version (expected 'v$rootver')"; rc=1
+      fi
       continue
     fi
     pj="$root/plugins/$nm/.claude-plugin/plugin.json"
@@ -566,11 +653,25 @@ cmd_drift(){
       if is_semver "$rtip" && is_semver "$curver" && _semver_gt "$curver" "$rtip"; then
         yellow "  ⚠ $name: remote tip $rtip is BEHIND marketplace $curver — possible revert/force-push; left unchanged, review manually"
       elif is_semver "$rtip" && _semver_gt "$rtip" "$curver"; then
+        # Ref-PINNED entry: version and ref advance together, and only to a version whose release
+        # tag actually exists — a bumped-but-untagged tip is "released but untagged": skipped with
+        # a warning (tag it, or carry it in via release), never half-carried.
+        local rref; rref="$(_source_ref "$root" "$name")"
+        if [[ -n "$rref" ]]; then
+          _remote_tag_exists "$rrepo" "v$rtip"
+          case $? in
+            1) yellow "  ⚠ $name: tip $rtip has no tag v$rtip on $rrepo — released but untagged; skipped (tag it, then drift again)"; continue;;
+            2) yellow "  ⚠ $name: cannot verify tag v$rtip on $rrepo (no gh/offline) — skipped"; continue;;
+          esac
+        fi
         echo "  • $name: marketplace=$curver  remote-tip=$rtip  → DRIFT (remote)"
         drifted="$drifted $name"; n=$((n+1))
         if [[ $dryrun -eq 0 ]]; then
           local rtmp; rtmp="$(mktemp)"
-          jq --arg n "$name" --arg v "$rtip" '(.plugins[]|select(.name==$n)|.version)=$v' "$root/.claude-plugin/marketplace.json" > "$rtmp" && mv "$rtmp" "$root/.claude-plugin/marketplace.json"
+          jq --arg n "$name" --arg v "$rtip" --arg r "$rref" \
+             '(.plugins[]|select(.name==$n)|.version)=$v
+              | if $r != "" then (.plugins[]|select(.name==$n)|.source.ref)=("v"+$v) else . end' \
+             "$root/.claude-plugin/marketplace.json" > "$rtmp" && mv "$rtmp" "$root/.claude-plugin/marketplace.json"
         fi
       else
         echo "  • $name: marketplace=$curver  remote-tip=${rtip:-<unreadable>}  ok"
@@ -755,7 +856,31 @@ cmd_new(){
   echo "     with:  /zorskill-dev:release $name <x.y.z>"
 }
 
-# ... (functions added in later tasks) ...
+# mirror — copy THIS marketplace's manifest into a PRIVATE org-sync companion repo, via the
+# GitHub Contents API (no clone). Claude's organization plugin sync ("Sync from GitHub" on
+# claude.ai) requires a private repo; a url+ref manifest is self-contained, so the companion
+# repo needs only this one file. No-op when the mirror already matches.
+cmd_mirror(){
+  local repo="${1:-${ZORSKILL_MIRROR_REPO:-}}"
+  [[ -n "$repo" ]] || { red "usage: mirror <owner/repo>   (or set ZORSKILL_MIRROR_REPO)"; return 2; }
+  _have_gh || { red "gh not installed — mirror needs the GitHub API"; return 1; }
+  local root; root="$(resolve_root)" || { red "cannot locate zorskill root (set ZORSKILL_ROOT)"; return 1; }
+  local mf="$root/.claude-plugin/marketplace.json" path=".claude-plugin/marketplace.json" ver sha b64
+  ver="$(jq -r '.version' "$mf")"
+  if gh api "repos/$repo/contents/$path" -H "Accept: application/vnd.github.raw" 2>/dev/null | cmp -s - "$mf"; then
+    green "Mirror already up to date: $repo @ $ver"; return 0
+  fi
+  sha="$(gh api "repos/$repo/contents/$path" --jq '.sha' 2>/dev/null || true)"
+  b64="$(base64 < "$mf" | tr -d '\n')"
+  if gh api -X PUT "repos/$repo/contents/$path" \
+       -f message="mirror: zorskill marketplace $ver" -f content="$b64" \
+       ${sha:+-f sha="$sha"} --jq '.commit.sha' >/dev/null 2>&1; then
+    green "Mirrored marketplace $ver → $repo ($path)"
+  else
+    red "✗ mirror failed — check that you can write to $repo (gh auth) and that it exists"
+    return 1
+  fi
+}
 
 main(){
   case "${1:-check}" in
@@ -764,7 +889,8 @@ main(){
     new)     shift; cmd_new "$@";;
     sync)    shift; cmd_sync "$@";;
     drift)   shift; cmd_drift "$@";;
-    *) echo "usage: $0 {check|release <name> <x.y.z> [--push]|new <name> [--repo-url URL] [--create-remote]|sync|drift [--push] [--dry-run]}"; exit 2;;
+    mirror)  shift; cmd_mirror "$@";;
+    *) echo "usage: $0 {check|release <name> <x.y.z> [--push]|new <name> [--repo-url URL] [--create-remote]|sync|drift [--push] [--dry-run]|mirror <owner/repo>}"; exit 2;;
   esac
 }
 

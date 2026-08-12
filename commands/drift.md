@@ -14,6 +14,9 @@ drifted plugin's tip is structurally broken, it reverts and commits nothing.
 `--dry-run` prints pinned-vs-repo versions and what would advance, changing nothing. Without `--push` it
 commits locally; `--push` pushes `main` (outward-facing — only when the user explicitly asks).
 
+For a ref-pinned remote entry, drift advances `version` and `source.ref` together, and only when the
+repo's `v<tip>` tag exists — a bumped-but-untagged tip is skipped with a "released but untagged" warning.
+
 ! bash "${CLAUDE_PLUGIN_ROOT}/scripts/zorskill-dev.sh" drift $ARGUMENTS
 
 Relay the output verbatim. If it aborted, report which plugin's tip broke the check and do not retry blindly.

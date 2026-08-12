@@ -1,5 +1,5 @@
 ---
-description: Audit the zorskill marketplace for version drift, JSON validity, both-format presence, and submodule health.
+description: Audit the zorskill marketplace for version drift, JSON validity, ref-pin consistency (source.ref == v<version>, tag exists), both-format presence, and submodule health.
 ---
 
 Run the repo-wide consistency audit and report the result verbatim.

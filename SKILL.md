@@ -1,8 +1,8 @@
 ---
 name: zorskill-dev
-description: "Maintainer tooling for the zorskill plugin marketplace. Use when releasing a plugin update (advance its submodule pointer + bump marketplace versions), auditing version drift across all plugins, detecting plugins released in their own repo but not yet carried into the marketplace, keeping the root README Skills table in sync, or scaffolding a new plugin. Commands: /zorskill-dev:check, /zorskill-dev:release, /zorskill-dev:new, /zorskill-dev:sync, /zorskill-dev:drift."
+description: "Maintainer tooling for the zorskill plugin marketplace. Use when releasing a plugin update (advance its ref pin / submodule pointer + bump marketplace versions), auditing version drift across all plugins, detecting plugins released in their own repo but not yet carried into the marketplace, keeping the root README Skills table in sync, mirroring the manifest to the private org-sync companion repo, or scaffolding a new plugin. Commands: /zorskill-dev:check, /zorskill-dev:release, /zorskill-dev:new, /zorskill-dev:sync, /zorskill-dev:drift, /zorskill-dev:mirror."
 metadata:
-  version: "0.8.1"
+  version: "0.10.0"
 ---
 
 # zorskill-dev
@@ -55,7 +55,13 @@ that stays each repo's own concern.
   offline), is skipped with a warning and is NON-BLOCKING for the gate — so reachable plugins still carry in
   even while an unreachable one is skipped (carry it in later once reachable, or via `/zorskill-dev:release`).
   Commit-only by default; `--push` pushes `main`; `--dry-run` previews and changes nothing. Intended for a
-  scheduled drift-detector Action.
+  scheduled drift-detector Action. For a ref-pinned remote entry, drift advances `version` and
+  `source.ref` together, and only when the `v<tip>` tag exists (untagged tips are skipped with a warning).
+- `/zorskill-dev:mirror [owner/repo]` — copy the manifest into the PRIVATE org-sync companion repo via
+  the GitHub Contents API (no clone). Claude's organization plugin sync ("Sync from GitHub" on claude.ai)
+  requires a private repo; since the manifest is url+ref self-contained, the companion repo holds only
+  this one file. No-op when already up to date. Repo defaults from `$ZORSKILL_MIRROR_REPO`. Run it after
+  pushing a marketplace change to `main`.
 
 ## Mixed-source marketplaces (submodule vs remote)
 
@@ -73,10 +79,22 @@ A marketplace plugin's `source` can be either kind — the tooling supports both
   keys **even for public repos** — `check` warns on it. `/plugin marketplace add` only reads
   `marketplace.json`; a remote-source plugin
   is cloned at **`/plugin install`** time with the user's own credentials, so it may be **public OR
-  private** (private installs per-access — fine). Remote plugins have no submodule on disk and are NOT
-  tool-managed: `check`'s version/both-format/submodule checks skip them (info line only); `release`/
-  `new` refuse them; `drift` never tries to advance them. `sync` still lists them in the README (Source
-  link from `source.repo`/`url`).
+  private** (private installs per-access — fine). Remote plugins have no submodule requirement:
+  `check`'s both-format/submodule checks skip them (info line only); `new` refuses them; but `release`
+  and `drift` DO manage them over the GitHub API, and `sync` lists them in the README (Source link from
+  `source.repo`/`url`).
+
+**Ref-pinned remote sources (the zorskill standard since marketplace 1.3.0).** A remote entry may pin
+`"ref": "v<version>"` — users then install the **release tag**, not the branch tip, restoring the exact
+version pinning submodule pointers used to give. The invariant is `source.ref == "v" + version`, and the
+tooling enforces it end to end: `check` errors on a mismatched ref and on a confirmed-missing tag
+(best-effort `gh` probe); `release <name> <x.y.z>` verifies tag `v<x.y.z>` exists AND that the
+`plugin.json` **at that tag** declares `<x.y.z>`, then advances version + ref together (never one
+without the other); `drift` carries a remote tip in only when its `v<tip>` tag exists — a bumped-but-
+untagged tip is skipped with a "released but untagged" warning. Every plugin repo's `Release` workflow
+already tags `v<x.y.z>`, so the normal flow needs nothing extra. An on-disk submodule checkout, when
+one still exists for a ref-pinned plugin, is advanced to the released tag by `release` (best-effort
+maintainer scaffolding — never blocks).
 
 **Rule of thumb: a plugin that must stay private has to be REMOTE-sourced, never a submodule.**
 
