@@ -436,8 +436,11 @@ check_release(){
     fi
   fi
   # Other plugins: report pre-existing non-uniformity/drift as WARNINGS only — never gate.
+  # Remote-sourced ones have no local plugin.json to compare — skip them silently (their own
+  # consistency is covered by check_refs / their release gate).
   while IFS=$'\t' read -r n s; do
     [[ "$n" == "$name" ]] && continue
+    _is_submodule "$root" "$n" || continue
     d="$root/${s#./}"; p="$d/.claude-plugin/plugin.json"
     if [[ ! -f "$p" ]]; then yellow "  ⚠ other plugin $n: missing plugin.json (pre-existing; not blocking $name)"; continue; fi
     rv="$(jq -r --arg m "$n" '.plugins[]|select(.name==$m)|.version' "$root/.claude-plugin/marketplace.json")"

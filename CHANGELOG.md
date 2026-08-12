@@ -3,6 +3,11 @@
 All notable changes to `zorskill-dev` are documented here. Versioning is semver;
 new capability → minor, fix/docs → patch.
 
+## [0.10.1] - 2026-08-12
+- `release`: the non-blocking "other plugins" drift report no longer misreports every REMOTE-sourced
+  plugin as "missing plugin.json" (they have no local manifest to compare — now skipped; their
+  consistency is covered by `check_refs` and their own release gate).
+
 ## [0.10.0] - 2026-08-12
 - **Ref-pinned remote sources** — first-class support for the zorskill marketplace's new arrangement
   where every plugin entry is `{"source":"url","url":"https://github.com/ZorCorp/<name>.git","ref":"v<version>"}`
